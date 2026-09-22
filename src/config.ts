@@ -8,20 +8,27 @@ import { ROLES, type Role } from "./message.js";
 export type HarnessId = "claude" | "codex";
 /** A model bound to its harness. */
 export interface Model {
+  /** Harness that provides the model. */
   harness: HarnessId;
+  /** Model name passed to the harness. */
   model: string;
 }
 /** A resolved role configuration saved for the lifetime of a Run. */
 export interface Participant extends Model {
+  /** Reasoning effort passed to the harness. */
   effort: string;
+  /** Additional arguments for the selected harness. */
   extraArgs: string[];
 }
 /** Explicit user configuration written only by the config command. */
 export interface Config {
   /** Show session events in terminal output. Defaults to false. */
   verbose?: boolean;
+  /** Models offered by the configuration picker. */
   models: Model[];
+  /** Default model for each Role. */
   defaults: Record<Role, Model>;
+  /** Effort and harness arguments for each Role. */
   roles: Record<Role, { effort: string; extraArgs: Record<HarnessId, string[]> }>;
 }
 /** Location of the user-managed config. */

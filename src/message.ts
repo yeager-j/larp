@@ -17,16 +17,25 @@ export type Kind =
   | "handoff";
 /** A durable message; completion metadata makes delivery crash recoverable. */
 export interface Entry {
+  /** Unique log entry identifier. */
   id: string;
+  /** Entry creation time in ISO 8601 format. */
   at: string;
+  /** Origin of the message or control action. */
   from: Sender;
+  /** Destination used for delivery or workflow control. */
   to: Recipient;
+  /** Action used by the workflow reducer. */
   kind: Kind;
+  /** Human-readable message content. */
   body: string;
   /** Full Planner plan, or the approved snapshot on a Human approval. */
   plan?: string;
+  /** Role associated with a Relay failure or retry. */
   role?: Role;
+  /** Cause of a Relay failure. */
   reason?: "schema" | "exit" | "error";
+  /** Committed Turn data used to repair delivery metadata after a crash. */
   completion?: { sessionId: string; delivered: string[] };
 }
 /** The sole authority for model reply destinations. */

@@ -30,9 +30,7 @@ function shortTool(event: Extract<HarnessEvent, { type: "tool" }>, cwd: string):
         input.description,
         input.message,
       ].find((value) => typeof value === "string") ?? "";
-  } catch {
-    /* Plain command strings are already readable. */
-  }
+  } catch {}
   if (isAbsolute(detail)) detail = relative(cwd, detail) || ".";
   detail = stripVTControlCharacters(detail).replace(/\s+/g, " ").trim();
   if (detail.length > 160) detail = `${detail.slice(0, 157)}…`;
@@ -91,9 +89,7 @@ export function createOutput({
         try {
           const reply = JSON.parse(event.text);
           if (reply && typeof reply === "object" && "kind" in reply) return;
-        } catch {
-          /* Ordinary prose is displayed as progress. */
-        }
+        } catch {}
       }
       lines(event.text);
     },

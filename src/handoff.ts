@@ -5,14 +5,20 @@ import type { Entry } from "./message.js";
 
 /** Approved planning context for a separate Codex desktop task. */
 export interface HandoffContext {
+  /** Working directory for the implementation task. */
   cwd: string;
+  /** Original Human task. */
   task: string;
+  /** Approved plan snapshot. */
   plan: string;
+  /** Messages retained as planning context. */
   entries: Entry[];
 }
 /** Local document to read before starting the desktop task. */
 export interface Handoff {
+  /** Working directory to open in Codex. */
   cwd: string;
+  /** Absolute path to the saved handoff document. */
   handoffPath: string;
 }
 /** Render the approved context as a standalone Markdown snapshot. */

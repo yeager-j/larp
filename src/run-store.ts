@@ -19,14 +19,21 @@ import { ROUND_CAP } from "./workflow/plan.js";
 
 /** Persisted identity and recoverable delivery cache for a Run. */
 export interface RunData {
+  /** Unique Run identifier. */
   id: string;
+  /** Original Human task. */
   task: string;
+  /** Working directory for every Turn in this Run. */
   cwd: string;
+  /** Run creation time in ISO 8601 format. */
   createdAt: string;
   /** Absent on legacy Runs, whose review cap was three. */
   reviewRoundCap?: number;
+  /** Fixed Role assignments for this Run. */
   participants: Record<Role, Participant>;
+  /** Resumable harness session identifiers by Role. */
   sessions: Partial<Record<Role, string>>;
+  /** Entry identifiers already delivered to a Participant. */
   delivered: string[];
 }
 /** Default Run storage, separate from the working repository. */
