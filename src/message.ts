@@ -1,12 +1,20 @@
 /** Jobs participating in the plan workflow. */
-export type Role = "planner" | "reviewer" | "implementer";
+export type Role = "planner" | "reviewer";
 /** Sources of durable log entries. */
-export type Sender = Role | "human" | "relay";
+export type Sender = Role | "human" | "relay" | "implementer";
 /** Destinations selected by the relay. */
-export type Recipient = Role | "human" | "run";
+export type Recipient = Role | "human" | "run" | "implementer";
 /** Protocol messages and durable control actions. */
 export type Kind =
-  "request" | "feedback" | "approve" | "question" | "done" | "abort" | "retry" | "failure";
+  | "request"
+  | "feedback"
+  | "approve"
+  | "question"
+  | "done"
+  | "abort"
+  | "retry"
+  | "failure"
+  | "handoff";
 /** A durable message; completion metadata makes delivery crash recoverable. */
 export interface Entry {
   id: string;
@@ -15,6 +23,7 @@ export interface Entry {
   to: Recipient;
   kind: Kind;
   body: string;
+  /** Full Planner plan, or the approved snapshot on a Human approval. */
   plan?: string;
   role?: Role;
   reason?: "schema" | "exit" | "error";
@@ -22,9 +31,8 @@ export interface Entry {
 }
 /** The sole authority for model reply destinations. */
 export const RECIPIENT: Record<Role, Partial<Record<Kind, Recipient>>> = {
-  planner: { request: "reviewer", feedback: "implementer", question: "human" },
+  planner: { request: "reviewer", question: "human" },
   reviewer: { feedback: "planner", approve: "planner" },
-  implementer: { question: "planner", done: "human" },
 };
 /** Roles in picker order. */
 export const ROLES = Object.keys(RECIPIENT) as Role[];

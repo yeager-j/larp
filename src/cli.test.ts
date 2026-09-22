@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
@@ -64,4 +64,16 @@ process.stdin.on('end', () => {
   const resumed = invoke(home, ["resume", id, "--quiet"], `${bin}:${process.env.PATH}`);
   assert.match(resumed.stdout, /gate/);
   assert.equal(RunStore.open(id, join(home, ".larp/runs")).entries().length, 2);
+});
+
+test("CLI runs through the symlink used by global npm installs", (t) => {
+  const home = tempDir(t);
+  const link = join(home, "larp");
+  symlinkSync(cli, link);
+  const result = spawnSync(process.execPath, ["--import", "tsx", link, "--help"], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /larp config/);
 });

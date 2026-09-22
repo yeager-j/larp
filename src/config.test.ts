@@ -38,6 +38,13 @@ test("config must exist, round trips and applies role-specific arguments", (t) =
   };
   writeConfig(config, path);
   assert.deepEqual(loadConfig(path), config);
+  const legacy = {
+    ...config,
+    defaults: { ...config.defaults, implementer: { harness: "claude", model: "haiku" } },
+    roles: { ...config.roles, implementer: config.roles.planner },
+  };
+  writeFileSync(path, JSON.stringify(legacy));
+  assert.deepEqual(Object.keys(participantsFor(loadConfig(path))).sort(), ["planner", "reviewer"]);
   assert.deepEqual(
     participantsFor(config, { reviewer: { harness: "codex", model: "gpt-test" } }).reviewer,
     { harness: "codex", model: "gpt-test", effort: "high", extraArgs: ["--test"] }

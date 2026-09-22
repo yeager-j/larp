@@ -78,11 +78,12 @@ export async function configure(): Promise<void> {
     defaults[role] = await pickModel(role, models, previous?.defaults[role]);
     models.push(defaults[role]);
   }
-  const roles =
-    previous?.roles ??
-    (Object.fromEntries(
-      ROLES.map((role) => [role, { effort: "high", extraArgs: { claude: [], codex: [] } }])
-    ) as unknown as Config["roles"]);
+  const roles = Object.fromEntries(
+    ROLES.map((role) => [
+      role,
+      previous?.roles[role] ?? { effort: "high", extraArgs: { claude: [], codex: [] } },
+    ])
+  ) as Config["roles"];
   writeConfig({
     verbose: previous?.verbose ?? false,
     models: [
@@ -95,7 +96,7 @@ export async function configure(): Promise<void> {
 }
 /** Recognize only explicit @role interjections with a nonempty message. */
 export function parseInterjection(line: string): { role: Role; body: string } | null {
-  const match = /^@(planner|reviewer|implementer)\s+(.+)$/.exec(line.trim());
+  const match = /^@(planner|reviewer)\s+(.+)$/.exec(line.trim());
   return match ? { role: match[1] as Role, body: match[2]!.trim() } : null;
 }
 /** Build terminal Gates and a cancellable stdin reader that yields ownership to clack. */
@@ -110,15 +111,17 @@ export function createUI({
     async phaseGate(state, planPath) {
       requireTerminal();
       clack.note(
-        planPath ? `Plan: ${planPath}` : "The Planner needs your answer before continuing.",
-        planPath ? "Ready to implement · Phase Gate" : "Planner question · Phase Gate"
+        planPath
+          ? `Plan: ${planPath}\nOpens a new Codex desktop composer. Press Send there to start implementation.`
+          : "The Planner needs your answer before continuing.",
+        planPath ? "Ready to hand off · Phase Gate" : "Planner question · Phase Gate"
       );
       const kind = selected(
         await clack.select({
           message: "Next action",
           options: [
             ...(state.lastPlanEntryId
-              ? [{ value: "approve" as const, label: "Approve implementation" }]
+              ? [{ value: "approve" as const, label: "Approve and open in Codex" }]
               : []),
             { value: "feedback" as const, label: "Message the Planner" },
             { value: "abort" as const, label: "Abort" },
@@ -198,7 +201,7 @@ export function createUI({
           while (queue.length && !signal?.aborted) {
             const message = parseInterjection(queue.shift()!);
             if (message) yield message;
-            else console.log("Use @planner, @reviewer, or @implementer followed by a message.");
+            else console.log("Use @planner or @reviewer followed by a message.");
           }
         }
       } finally {

@@ -1,19 +1,20 @@
 #!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { CONFIG_PATH, loadConfig, parseModel, participantsFor, type Model } from "./config.js";
+import { openCodexHandoff } from "./handoff.js";
 import { claudeHarness } from "./harness/claude.js";
 import { codexHarness } from "./harness/codex.js";
 import { ROLES, type Role } from "./message.js";
 import { runRelay } from "./relay.js";
 import { listRuns, RunStore } from "./run-store.js";
 import { configure, createUI, pickModel } from "./tui.js";
-import { initial, reduce } from "./workflow/plan.js";
+import { initial, reduceWithCap } from "./workflow/plan.js";
 
 const help = `larp config
-larp plan "<task>" [--pick] [--planner harness:model] [--reviewer harness:model] [--implementer harness:model] [--quiet]
+larp plan "<task>" [--pick] [--planner harness:model] [--reviewer harness:model] [--quiet]
 larp resume <run-id> [--quiet]
 larp runs
 larp show <run-id>
@@ -31,7 +32,6 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       help: { type: "boolean", short: "h" },
       planner: { type: "string" },
       reviewer: { type: "string" },
-      implementer: { type: "string" },
     },
   });
   if (values.help || !positionals.length) {
@@ -77,16 +77,19 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     }
     run = RunStore.create(task, participantsFor(config, overrides));
   } else throw new Error(`Unknown command: ${command}\n${help}`);
-  console.log(`Run ${run.data.id} · ${run.entries().reduce(reduce, initial()).phase}`);
+  console.log(
+    `Run ${run.data.id} · ${run.entries().reduce((state, item) => reduceWithCap(state, item, run.data.reviewRoundCap ?? 3), initial()).phase}`
+  );
   const phase = await runRelay({
     run,
     participants: run.data.participants,
     harnesses: { claude: claudeHarness, codex: codexHarness },
+    handoff: openCodexHandoff,
     ui: createUI({ quiet: values.quiet ?? false, verbose, cwd: run.data.cwd }),
   });
   console.log(`Run ${run.data.id}: ${phase}`);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

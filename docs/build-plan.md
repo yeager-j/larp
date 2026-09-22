@@ -1,5 +1,7 @@
 # larp v1 build plan
 
+> Historical v1 document. The Implementer workflow and three-round limit below are superseded by [ADR 0003](./adr/0003-planning-ends-with-desktop-handoff.md): planning now ends with a Codex desktop handoff, and new Runs allow five review rounds. See README.md for current usage.
+
 Implements [docs/design.md](./design.md). Vocabulary from [CONTEXT.md](../CONTEXT.md). Decisions in [docs/adr](./adr).
 
 ## Outcomes

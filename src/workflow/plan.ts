@@ -1,7 +1,7 @@
 import { RECIPIENT, type Entry, type Role } from "../message.js";
 
 /** Durable workflow phases. */
-export type Phase = "planning" | "gate" | "implementing" | "failure" | "done" | "aborted";
+export type Phase = "planning" | "gate" | "handoff" | "failure" | "done" | "handed-off" | "aborted";
 /** State obtained solely by folding the log. */
 export interface PlanState {
   phase: Phase;
@@ -9,11 +9,9 @@ export interface PlanState {
   pending: Role | null;
   failure?: { role: Role; attempts: number; reason: Entry["reason"]; body: string };
   lastPlanEntryId?: string;
-  returnPhase?: "planning" | "implementing";
-  gatePhase?: "planning" | "implementing";
 }
 /** Maximum review rounds before human approval. */
-export const ROUND_CAP = 3;
+export const ROUND_CAP = 5;
 /** Harness-compatible strict reply schema. Planner plan is null for non-request replies. */
 export function schemaFor(role: Role): object {
   return {
@@ -53,19 +51,23 @@ export function initial(): PlanState {
 }
 /** Fold one entry; unrelated or invalid actions leave state unchanged. */
 export function reduce(state: PlanState, entry: Entry): PlanState {
-  if (state.phase === "done" || state.phase === "aborted") return state;
+  return reduceWithCap(state, entry, ROUND_CAP);
+}
+/** Replay older Runs using their original review limit. */
+export function reduceWithCap(state: PlanState, entry: Entry, roundCap: number): PlanState {
+  if (state.phase === "done" || state.phase === "handed-off" || state.phase === "aborted")
+    return state;
   if (entry.from === "human" && entry.to === "run" && entry.kind === "abort")
     return { ...state, phase: "aborted", pending: null };
   if (
     entry.from === "relay" &&
     entry.kind === "failure" &&
     entry.role === state.pending &&
-    (state.phase === "planning" || state.phase === "implementing")
+    state.phase === "planning"
   ) {
     return {
       ...state,
       phase: "failure",
-      returnPhase: state.phase,
       failure: {
         role: entry.role,
         attempts: (state.failure?.attempts ?? 0) + 1,
@@ -81,7 +83,7 @@ export function reduce(state: PlanState, entry: Entry): PlanState {
       (entry.from === "human" || entry.from === "relay") &&
       entry.role === state.failure?.role
     ) {
-      const next = { ...state, phase: state.returnPhase ?? "planning", pending: entry.role! };
+      const next = { ...state, phase: "planning" as const, pending: entry.role! };
       if (entry.from === "human") delete next.failure;
       return next;
     }
@@ -94,18 +96,25 @@ export function reduce(state: PlanState, entry: Entry): PlanState {
       entry.to === "run" &&
       state.lastPlanEntryId
     )
-      return { ...state, phase: "implementing", pending: "implementer" };
+      return { ...state, phase: "handoff", pending: null };
     if (entry.from === "human" && entry.kind === "feedback" && entry.to === "planner")
-      return { ...state, phase: state.gatePhase ?? "planning", round: 0, pending: "planner" };
+      return { ...state, phase: "planning", round: 0, pending: "planner" };
+    return state;
+  }
+  if (state.phase === "handoff") {
+    if (entry.from === "relay" && entry.kind === "handoff" && entry.to === "human")
+      return { ...state, phase: "handed-off", pending: null };
+    // Completed Runs from the earlier implementation workflow remain terminal.
+    if (entry.from === "implementer" && entry.kind === "done")
+      return { ...state, phase: "done", pending: null };
     return state;
   }
   if (entry.from !== state.pending || RECIPIENT[entry.from as Role]?.[entry.kind] !== entry.to)
     return state;
   const next = { ...state };
   delete next.failure;
-  delete next.returnPhase;
   if (entry.from === "planner" && entry.kind === "question")
-    return { ...next, phase: "gate", gatePhase: state.phase, pending: null };
+    return { ...next, phase: "gate", pending: null };
   if (state.phase === "planning") {
     if (entry.from === "planner" && entry.kind === "request")
       return { ...next, pending: "reviewer", lastPlanEntryId: entry.id };
@@ -114,29 +123,19 @@ export function reduce(state: PlanState, entry: Entry): PlanState {
       return {
         ...next,
         round,
-        phase: entry.kind === "approve" || round >= ROUND_CAP ? "gate" : "planning",
-        gatePhase: "planning",
-        pending: entry.kind === "approve" || round >= ROUND_CAP ? null : "planner",
+        phase: entry.kind === "approve" || round >= roundCap ? "gate" : "planning",
+        pending: entry.kind === "approve" || round >= roundCap ? null : "planner",
       };
     }
-  }
-  if (state.phase === "implementing") {
-    if (entry.from === "implementer" && entry.kind === "question")
-      return { ...next, pending: "planner" };
-    if (entry.from === "planner" && entry.kind === "feedback")
-      return { ...next, pending: "implementer" };
-    if (entry.from === "implementer" && entry.kind === "done")
-      return { ...next, phase: "done", pending: null };
   }
   return state;
 }
 /** Roles accepting interjections in the current phase. */
 export function activeRoles(state: PlanState): Role[] {
   if (state.phase === "planning") return ["planner", "reviewer"];
-  if (state.phase === "implementing") return ["planner", "implementer"];
   return [];
 }
 /** Return the next runnable Role, or null at gates and terminal states. */
 export function nextTurn(state: PlanState): Role | null {
-  return state.phase === "planning" || state.phase === "implementing" ? state.pending : null;
+  return state.phase === "planning" ? state.pending : null;
 }

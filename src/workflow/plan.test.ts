@@ -25,42 +25,36 @@ test("happy path, review cap, active Roles, and terminal stability", () => {
   assert.equal(state.phase, "gate");
   assert.equal(nextTurn(state), null);
   state = reduce(state, humanApproval);
-  assert.deepEqual(activeRoles(state), ["planner", "implementer"]);
-  state = reduce(state, message("implementer", "done", "human"));
-  assert.equal(state.phase, "done");
+  assert.deepEqual(activeRoles(state), []);
+  assert.equal(nextTurn(state), null);
+  state = reduce(state, message("relay", "handoff", "human"));
+  assert.equal(state.phase, "handed-off");
   assert.equal(reduce(state, message("human", "abort", "run")), state);
   state = initial();
+  assert.equal(ROUND_CAP, 5);
   for (let i = 0; i < ROUND_CAP; i++) {
     state = reduce(state, request);
     state = reduce(state, feedback);
+    if (i < 4) assert.equal(state.phase, "planning");
   }
   assert.equal(state.phase, "gate");
   assert.equal(state.round, ROUND_CAP);
 });
-test("Planner questions, Gate feedback, Implementer questions, and escalation", () => {
+test("Planner questions and Gate feedback resume planning", () => {
   let state = reduce(initial(), message("planner", "question", "human"));
   assert.equal(state.phase, "gate");
   assert.equal(reduce(state, humanApproval), state);
   state = reduce(state, message("human", "feedback", "planner"));
   assert.equal(nextTurn(state), "planner");
-  for (const item of [
-    request,
-    approval,
-    humanApproval,
-    message("implementer", "question", "planner"),
-  ])
-    state = reduce(state, item);
-  assert.equal(nextTurn(state), "planner");
-  state = reduce(state, message("planner", "question", "human"));
+  for (const item of [request, approval]) state = reduce(state, item);
   state = reduce(state, message("human", "feedback", "planner"));
-  assert.equal(state.phase, "implementing");
-  state = reduce(state, message("planner", "feedback", "implementer"));
-  assert.equal(nextTurn(state), "implementer");
+  assert.equal(state.phase, "planning");
+  assert.equal(state.round, 0);
 });
 test("interjections do not schedule Turns; failures return to the original phase", () => {
   const state = initial();
   assert.equal(reduce(state, message("human", "feedback", "reviewer")), state);
-  for (const phase of ["planning", "implementing"] as const) {
+  for (const phase of ["planning"] as const) {
     let current: PlanState = { ...state, phase };
     const failure = message("relay", "failure", "run", { role: "planner", reason: "schema" });
     const retry = message("relay", "retry", "run", { role: "planner" });
@@ -73,12 +67,12 @@ test("interjections do not schedule Turns; failures return to the original phase
     current = reduce(current, message("human", "retry", "run", { role: "planner" }));
     assert.equal(current.phase, phase);
     assert.equal(current.failure, undefined);
-    const success = phase === "planning" ? request : message("planner", "feedback", "implementer");
+    const success = request;
     assert.equal(reduce(current, success).failure, undefined);
   }
 });
 test("abort works from each live phase; unrelated model moves are ignored", () => {
-  for (const phase of ["planning", "gate", "implementing", "failure"] as const) {
+  for (const phase of ["planning", "gate", "handoff", "failure"] as const) {
     assert.equal(
       reduce({ ...initial(), phase }, message("human", "abort", "run")).phase,
       "aborted"
@@ -98,6 +92,6 @@ test("schemas match the fixed routing table and validate strict replies", () => 
   assert.ok(validReply("planner", { kind: "question", body: "why?", plan: null }));
   assert.ok(!validReply("planner", { kind: "request", body: "plan", plan: " " }));
   assert.ok(!validReply("reviewer", { kind: "approve", body: "yes", to: "planner" }));
-  assert.ok(!validReply("implementer", { kind: "approve", body: "yes" }));
+  assert.ok(!validReply("planner", { kind: "feedback", body: "yes", plan: null }));
   assert.ok(!validReply("planner", { kind: "question", body: "why?", plan: "overwrite" }));
 });

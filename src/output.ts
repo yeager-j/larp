@@ -4,13 +4,14 @@ import { stripVTControlCharacters } from "node:util";
 import type { HarnessEvent } from "./harness/types.js";
 import type { Entry, Role } from "./message.js";
 
-const ROLE_COLOR: Record<Role, number> = { planner: 36, reviewer: 35, implementer: 34 };
+const ROLE_COLOR: Record<Role, number> = { planner: 36, reviewer: 35 };
 const STATUS: Partial<Record<Entry["kind"], string>> = {
   request: "Plan ready for review",
   approve: "Approved",
   feedback: "Feedback",
   question: "Question",
   done: "Complete",
+  handoff: "Opened in Codex",
 };
 function title(value: string): string {
   return value[0]!.toUpperCase() + value.slice(1);
@@ -97,7 +98,7 @@ export function createOutput({
       lines(event.text);
     },
     message(entry: Entry) {
-      const success = entry.kind === "done" || entry.kind === "approve";
+      const success = entry.kind === "done" || entry.kind === "approve" || entry.kind === "handoff";
       const marker = success
         ? symbols.ok
         : entry.kind === "question"

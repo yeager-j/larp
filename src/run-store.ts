@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 
 import type { Participant } from "./config.js";
 import { ROLES, type Entry, type Role } from "./message.js";
+import { ROUND_CAP } from "./workflow/plan.js";
 
 /** Persisted identity and recoverable delivery cache for a Run. */
 export interface RunData {
@@ -22,6 +23,8 @@ export interface RunData {
   task: string;
   cwd: string;
   createdAt: string;
+  /** Absent on legacy Runs, whose review cap was three. */
+  reviewRoundCap?: number;
   participants: Record<Role, Participant>;
   sessions: Partial<Record<Role, string>>;
   delivered: string[];
@@ -54,6 +57,7 @@ export class RunStore {
       participants,
       cwd: resolve(cwd),
       createdAt: new Date().toISOString(),
+      reviewRoundCap: ROUND_CAP,
       sessions: {},
       delivered: [],
     });
@@ -125,6 +129,14 @@ export class RunStore {
   /** Absolute Plan artifact path. */
   get planPath(): string {
     return join(this.directory, "plan.md");
+  }
+  /** Absolute approved handoff document path, separate from the editable Plan. */
+  get handoffPath(): string {
+    return join(this.directory, "handoff.md");
+  }
+  /** Save a complete approved snapshot before opening the desktop composer. */
+  writeHandoff(text: string): void {
+    this.atomicWrite(this.handoffPath, text);
   }
   /** Replace the Plan before appending its request entry. */
   writePlan(text: string): void {

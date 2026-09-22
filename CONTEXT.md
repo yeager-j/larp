@@ -9,7 +9,7 @@ A coding agent product that owns a session, its tools, and its permissions. Toda
 _Avoid_: Agent, CLI, tool
 
 **Role**:
-A named job inside a Workflow, such as Planner, Reviewer, or Implementer. A Role says what a Participant is for and what it may touch.
+A named job inside a Workflow, such as Planner or Reviewer. Implementation happens in a separate Codex desktop task. A Role says what a Participant is for and what it may touch.
 _Avoid_: Agent, persona
 
 **Participant**:
@@ -53,7 +53,7 @@ The text the Relay puts in front of a Message body when it delivers it: who sent
 _Avoid_: Header, wrapper, prompt
 
 **Phase**:
-A stage of a Workflow with its own set of active Roles and its own terminal Kinds. `larp plan` has three: planning, gate, implementing.
+A stage of a Workflow with its own set of active Roles and its own terminal Kinds. `larp plan` moves through planning, a Human gate, and desktop handoff. A successful handoff ends the Run; implementation is outside larp.
 _Avoid_: Stage, step, state
 
 **Gate**:

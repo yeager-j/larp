@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import type { Participant } from "./config.js";
+import { renderHandoff, type Handoff } from "./handoff.js";
 import { TurnInterrupted } from "./harness/spawn.js";
 import type { Harness, HarnessEvent, TurnResult } from "./harness/types.js";
 import { envelope, RECIPIENT, ROLES, type Entry, type Role } from "./message.js";
@@ -10,6 +12,7 @@ import {
   initial,
   nextTurn,
   reduce,
+  reduceWithCap,
   schemaFor,
   validReply,
   type Phase,
@@ -68,6 +71,7 @@ export async function runRelay(opts: {
   harnesses: Record<"claude" | "codex", Harness>;
   participants: Record<Role, Participant>;
   ui: RelayUI;
+  handoff(input: Handoff): Promise<void>;
 }): Promise<Phase> {
   const release = opts.run.acquire();
   try {
@@ -80,13 +84,44 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
   const { run, harnesses, participants, ui } = opts;
   const latestPlan = run
     .entries()
-    .findLast((item) => item.from === "planner" && item.kind === "request" && item.plan);
+    .findLast(
+      (item) =>
+        item.plan &&
+        ((item.from === "planner" && item.kind === "request") ||
+          (item.from === "human" && item.kind === "approve"))
+    );
   if (latestPlan?.plan) run.writePlan(latestPlan.plan);
   let displayedMessageId: string | undefined;
   while (true) {
     const entries = run.entries();
-    const state = entries.reduce(reduce, initial());
-    if (state.phase === "done" || state.phase === "aborted") return state.phase;
+    const state = entries.reduce(
+      (state, item) => reduceWithCap(state, item, run.data.reviewRoundCap ?? 3),
+      initial()
+    );
+    if (state.phase === "done" || state.phase === "handed-off" || state.phase === "aborted")
+      return state.phase;
+    if (state.phase === "handoff") {
+      const approved = entries.findLast((item) => item.from === "human" && item.kind === "approve");
+      const plan = approved?.plan ?? readFileSync(run.planPath, "utf8");
+      try {
+        run.writeHandoff(renderHandoff({ cwd: run.data.cwd, task: run.data.task, plan, entries }));
+        await opts.handoff({ cwd: run.data.cwd, handoffPath: run.handoffPath });
+      } catch (error) {
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)} Plan remains approved. Retry with larp resume ${run.data.id}.`
+        );
+      }
+      const sent = entry({
+        from: "relay",
+        to: "human",
+        kind: "handoff",
+        body: `Opened the approved plan in Codex desktop. Press Send there to start implementation.\nHandoff: ${run.handoffPath}\nlarp does not track implementation progress.`,
+      });
+      run.append(sent);
+      if (ui.message) ui.message(sent);
+      else ui.log(sent.body);
+      continue;
+    }
     const role = nextTurn(state);
     if (!role) {
       if (state.phase === "failure") {
@@ -114,12 +149,17 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
           ui.log("A plan is required before approval. Message the Planner or abort.");
           continue;
         }
+        const approvedPlan =
+          action.kind === "approve" ? readFileSync(run.planPath, "utf8") : undefined;
+        if (approvedPlan !== undefined && !approvedPlan.trim())
+          throw new Error("The plan is empty. Restore it before approving.");
         run.append(
           entry({
             from: "human",
             to: action.kind === "feedback" ? "planner" : "run",
             kind: action.kind,
             body: action.kind === "feedback" ? action.body : "",
+            ...(approvedPlan !== undefined ? { plan: approvedPlan } : {}),
           })
         );
       }
@@ -137,7 +177,7 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
       ...(state.lastPlanEntryId ? { planPath: run.planPath } : {}),
       entries: waiting,
       models: Object.fromEntries(ROLES.map((role) => [role, participants[role].model])),
-      schemaReminder: `${JSON.stringify(schema)}. Current phase: ${state.phase}. ${state.phase === "implementing" && role === "planner" ? "Answer with feedback or question." : ""}`,
+      schemaReminder: `${JSON.stringify(schema)}. Current phase: ${state.phase}. `,
     });
     ui.startTurn?.(role, participant.model);
     const controller = new AbortController();
@@ -150,7 +190,7 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
       result = await harnesses[participant.harness].runTurn({
         ...participant,
         cwd: run.data.cwd,
-        permission: role === "implementer" ? "write" : "read-only",
+        permission: "read-only",
         rolePrompt: ROLE_PROMPTS[role],
         prompt,
         first: !sessionId,
