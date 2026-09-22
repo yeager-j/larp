@@ -24,6 +24,8 @@ larp resume <run-id>
 
 Use `--quiet` to hide harness progress while retaining Messages and Gates. During a Turn, type `@planner your message` (or another active Role) and press Enter. It is delivered on that Role's next Turn.
 
+Output is grouped by Turn, with short tool summaries and a single formatted Message for each reply. Colors are disabled when output is redirected or `NO_COLOR` is set. Raw tool arguments, structured-output events, and session IDs are hidden by default. Add `"verbose": true` at the top level of `~/.config/larp/config.json` to show these diagnostic details for new and resumed Runs. `--quiet` still hides all harness progress, including session events.
+
 The Phase Gate offers approval, a message to the Planner, or abort. A Planner question before any plan exists offers a message or abort. The Failure Gate offers retry, retry with a note, or abort. Gates require a terminal; a non-interactive launch stops there with the Run saved for `larp resume`.
 
 Planner and Reviewer use the design's read-only permission profiles. Implementer uses Claude's permission bypass or Codex's workspace-write sandbox. The Relay itself writes only configuration and Run artifacts, never repository files or git state.

@@ -11,8 +11,8 @@ import {
   type Config,
   type Model,
 } from "./config.js";
-import type { HarnessEvent } from "./harness/types.js";
 import { ROLES, type Role } from "./message.js";
+import { createOutput } from "./output.js";
 import type { RelayUI } from "./relay.js";
 
 function requireTerminal(): void {
@@ -84,6 +84,7 @@ export async function configure(): Promise<void> {
       ROLES.map((role) => [role, { effort: "high", extraArgs: { claude: [], codex: [] } }])
     ) as unknown as Config["roles"]);
   writeConfig({
+    verbose: previous?.verbose ?? false,
     models: [
       ...new Map(models.map((model) => [`${model.harness}:${model.model}`, model])).values(),
     ],
@@ -97,28 +98,21 @@ export function parseInterjection(line: string): { role: Role; body: string } | 
   const match = /^@(planner|reviewer|implementer)\s+(.+)$/.exec(line.trim());
   return match ? { role: match[1] as Role, body: match[2]!.trim() } : null;
 }
-/** Render a normalized harness event. */
-export function renderEvent(role: Role, model: string, event: HarnessEvent): string {
-  const detail =
-    event.type === "tool"
-      ? `${event.name}${event.detail ? ` ${event.detail}` : ""}`
-      : event.type === "text"
-        ? event.text
-        : event.type === "thinking"
-          ? "thinking"
-          : `session ${event.sessionId}`;
-  return `${role[0]!.toUpperCase()}${role.slice(1)} · ${model} · ${detail}`;
-}
 /** Build terminal Gates and a cancellable stdin reader that yields ownership to clack. */
-export function createUI(quiet = false): RelayUI {
+export function createUI({
+  quiet = false,
+  verbose = false,
+  cwd = process.cwd(),
+}: { quiet?: boolean; verbose?: boolean; cwd?: string } = {}): RelayUI {
   return {
+    ...createOutput({ quiet, verbose, cwd }),
     log: (line) => console.log(line),
-    event: (role, model, event) => {
-      if (!quiet) console.log(renderEvent(role, model, event));
-    },
     async phaseGate(state, planPath) {
       requireTerminal();
-      clack.log.info(`Phase Gate${planPath ? ` · ${planPath}` : " · Planner needs an answer"}`);
+      clack.note(
+        planPath ? `Plan: ${planPath}` : "The Planner needs your answer before continuing.",
+        planPath ? "Ready to implement · Phase Gate" : "Planner question · Phase Gate"
+      );
       const kind = selected(
         await clack.select({
           message: "Next action",
@@ -145,7 +139,7 @@ export function createUI(quiet = false): RelayUI {
     },
     async failureGate(state) {
       requireTerminal();
-      clack.log.error(`Failure Gate · ${state.failure?.role}: ${state.failure?.body}`);
+      clack.note(`${state.failure?.role}: ${state.failure?.body}`, "Turn failed · Failure Gate");
       const action = selected(
         await clack.select({
           message: "Next action",
@@ -175,7 +169,7 @@ export function createUI(quiet = false): RelayUI {
       const reader = createInterface({
         input: process.stdin,
         output: process.stdout,
-        terminal: true,
+        terminal: Boolean(process.stdout.isTTY),
       });
       const queue: string[] = [];
       let closed = false;

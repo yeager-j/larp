@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
-import { loadConfig, parseModel, participantsFor, type Model } from "./config.js";
+import { CONFIG_PATH, loadConfig, parseModel, participantsFor, type Model } from "./config.js";
 import { claudeHarness } from "./harness/claude.js";
 import { codexHarness } from "./harness/codex.js";
 import { ROLES, type Role } from "./message.js";
@@ -57,13 +58,16 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     return;
   }
   let run: RunStore;
+  let verbose = false;
   if (command === "resume") {
     if (operands.length !== 1) throw new Error("Usage: larp resume <run-id>");
     run = RunStore.open(operands[0]!);
+    if (existsSync(CONFIG_PATH)) verbose = loadConfig().verbose ?? false;
   } else if (command === "plan") {
     const task = operands.join(" ").trim();
     if (!task) throw new Error('Usage: larp plan "<task>"');
     const config = loadConfig();
+    verbose = config.verbose ?? false;
     const overrides: Partial<Record<Role, Model>> = {};
     for (const role of ROLES) {
       const explicit = values[role];
@@ -78,7 +82,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     run,
     participants: run.data.participants,
     harnesses: { claude: claudeHarness, codex: codexHarness },
-    ui: createUI(values.quiet),
+    ui: createUI({ quiet: values.quiet ?? false, verbose, cwd: run.data.cwd }),
   });
   console.log(`Run ${run.data.id}: ${phase}`);
 }

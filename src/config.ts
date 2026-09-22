@@ -18,6 +18,8 @@ export interface Participant extends Model {
 }
 /** Explicit user configuration written only by the config command. */
 export interface Config {
+  /** Show session events in terminal output. Defaults to false. */
+  verbose?: boolean;
   models: Model[];
   defaults: Record<Role, Model>;
   roles: Record<Role, { effort: string; extraArgs: Record<HarnessId, string[]> }>;
@@ -56,6 +58,8 @@ export function parseModel(value: string): Model {
 export function loadConfig(path = CONFIG_PATH): Config {
   if (!existsSync(path)) throw new Error("No larp configuration. Run `larp config` first.");
   const config = JSON.parse(readFileSync(path, "utf8")) as Config;
+  if (config.verbose !== undefined && typeof config.verbose !== "boolean")
+    throw new Error("Config verbose must be a boolean.");
   if (!Array.isArray(config.models))
     throw new Error("Config models must be an array. Run `larp config`.");
   for (const model of [...config.models, ...ROLES.map((role) => config.defaults?.[role])]) {

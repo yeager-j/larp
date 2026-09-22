@@ -26,6 +26,9 @@ export interface RelayUI {
   failureGate(state: PlanState): Promise<{ kind: "retry"; body: string } | { kind: "abort" }>;
   interjections(signal?: AbortSignal): AsyncIterable<{ role: Role; body: string }>;
   log(line: string): void;
+  startTurn?(role: Role, model: string): void;
+  message?(entry: Entry): void;
+  failure?(role: Role, body: string): void;
   event?(role: Role, model: string, event: HarnessEvent): void;
 }
 function entry(fields: Omit<Entry, "id" | "at">): Entry {
@@ -79,6 +82,7 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
     .entries()
     .findLast((item) => item.from === "planner" && item.kind === "request" && item.plan);
   if (latestPlan?.plan) run.writePlan(latestPlan.plan);
+  let displayedMessageId: string | undefined;
   while (true) {
     const entries = run.entries();
     const state = entries.reduce(reduce, initial());
@@ -100,7 +104,11 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
         const last = entries.findLast(
           (item) => item.kind === "question" || item.from === "reviewer"
         );
-        if (last) ui.log(`${last.from}: ${last.body}`);
+        if (last && last.id !== displayedMessageId) {
+          if (ui.message) ui.message(last);
+          else ui.log(`${last.from}: ${last.body}`);
+          displayedMessageId = last.id;
+        }
         const action = await ui.phaseGate(state, state.lastPlanEntryId ? run.planPath : undefined);
         if (action.kind === "approve" && !state.lastPlanEntryId) {
           ui.log("A plan is required before approval. Message the Planner or abort.");
@@ -131,6 +139,7 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
       models: Object.fromEntries(ROLES.map((role) => [role, participants[role].model])),
       schemaReminder: `${JSON.stringify(schema)}. Current phase: ${state.phase}. ${state.phase === "implementing" && role === "planner" ? "Answer with feedback or question." : ""}`,
     });
+    ui.startTurn?.(role, participant.model);
     const controller = new AbortController();
     let inputError: unknown;
     const interjections = receiveInterjections(ui, run, state, controller.signal).catch((error) => {
@@ -174,7 +183,8 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
           body,
         })
       );
-      ui.log(`Failure (${role}): ${body}`);
+      if (ui.failure) ui.failure(role, body);
+      else ui.log(`Failure (${role}): ${body}`);
       continue;
     }
     const output = result.output;
@@ -195,13 +205,16 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
       );
       if (!state.failure)
         run.append(entry({ from: "relay", to: "run", kind: "retry", role, body }));
-      ui.log(`Failure (${role}): ${body}`);
+      if (ui.failure) ui.failure(role, body);
+      else ui.log(`Failure (${role}): ${body}`);
       continue;
     }
     if (reply.plan) run.writePlan(reply.plan);
     run.append(reply);
     run.setSession(role, result.sessionId);
     run.markDelivered(waiting.map((item) => item.id));
-    ui.log(`${role} → ${reply.to} (${reply.kind}): ${reply.body}`);
+    if (ui.message) ui.message(reply);
+    else ui.log(`${role} → ${reply.to} (${reply.kind}): ${reply.body}`);
+    displayedMessageId = reply.id;
   }
 }
