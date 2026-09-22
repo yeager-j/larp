@@ -1,0 +1,27 @@
+{
+  "name": "larp",
+  "version": "0.0.0",
+  "description": "LLM Agent Relay Protocol: lets Claude Code and Codex sessions message each other without knowing each other's harness API.",
+  "type": "module",
+  "bin": {
+    "larp": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx src/**/*.test.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
