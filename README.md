@@ -1,4 +1,6 @@
-# larp
+# LARP: LLM Agent Relay Protocol
+
+> LARP as a software engineer!
 
 A local relay between Claude Code and Codex. A Planner writes a plan, a Reviewer checks it, and a Human approves it. larp then opens the approved plan in a new Codex desktop composer and exits. Press Send in Codex to start implementation.
 
