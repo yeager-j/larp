@@ -71,6 +71,7 @@ test("happy path persists sessions, writes plan before message, and delivers que
   assert.equal(turns[3]?.sessionId, "session-reviewer-model");
   assert.match(turns[2]!.prompt, /Improve tests/);
   assert.ok(turns.every((turn) => turn.permission === "read-only"));
+  assert.ok(turns.every((turn) => !turn.rolePrompt.includes("undefined")));
   const opened = RunStore.open(run.data.id, root);
   assert.deepEqual(Object.keys(opened.data.sessions).sort(), ["planner", "reviewer"]);
   assert.equal(opened.entries().at(-1)?.kind, "handoff");
@@ -269,7 +270,7 @@ test("approval snapshots edits, failed handoff resumes without Turns, and succes
       assert.match(readFileSync(input.handoffPath, "utf8"), /# Human-edited approved plan/);
       throw new Error("No desktop app");
     }),
-    /larp resume/
+    /larp plan resume/
   );
   assert.equal(turns.length, 2);
   assert.equal(run.entries().at(-1)?.plan, "# Human-edited approved plan");
@@ -330,4 +331,20 @@ test("legacy Runs retain their original three-round cap during replay", async (t
     "aborted"
   );
   assert.equal(gates, 1);
+});
+
+test("Role instructions follow the Workflow protocol, and permission stays read-only", async (t) => {
+  const run = RunStore.create(
+    "task",
+    {
+      ...participants,
+      reviewer: { ...participants.reviewer, instructions: "Focus on migrations." },
+    },
+    tempDir(t)
+  );
+  const turns: TurnRequest[] = [];
+  assert.equal(await runWith(run, harness([plan, approve], turns)), "handed-off");
+  assert.doesNotMatch(turns[0]!.rolePrompt, /Focus on migrations/);
+  assert.match(turns[1]!.rolePrompt, /You are Reviewer[\s\S]*\n\nFocus on migrations\.$/);
+  assert.equal(turns[1]!.permission, "read-only");
 });

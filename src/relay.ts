@@ -136,7 +136,7 @@ async function completeHandoff(
     await opts.handoff({ cwd: run.data.cwd, handoffPath: run.handoffPath });
   } catch (error) {
     throw new Error(
-      `${error instanceof Error ? error.message : String(error)} Plan remains approved. Retry with larp resume ${run.data.id}.`
+      `${error instanceof Error ? error.message : String(error)} Plan remains approved. Retry with larp plan resume ${run.data.id}.`
     );
   }
   const sent = entry({
@@ -227,7 +227,9 @@ async function runParticipantTurn(
       ...participant,
       cwd: run.data.cwd,
       permission: "read-only",
-      rolePrompt: ROLE_PROMPTS[role],
+      rolePrompt: participant.instructions
+        ? `${ROLE_PROMPTS[role]}\n\n${participant.instructions}`
+        : ROLE_PROMPTS[role],
       prompt,
       first: !sessionId,
       schema,

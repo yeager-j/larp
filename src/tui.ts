@@ -5,15 +5,16 @@ import * as clack from "@clack/prompts";
 import {
   CLAUDE_MODELS,
   CONFIG_PATH,
+  legacyRoles,
   loadConfig,
   readCodexModels,
   writeConfig,
-  type Config,
   type Model,
 } from "./config.js";
 import { ROLES, type Role } from "./message.js";
 import { createOutput } from "./output.js";
 import type { RelayUI } from "./relay.js";
+import { builtInRole, listRoles, ROLES_PATH, writeRole, type RoleDefinition } from "./roles.js";
 
 function requireTerminal(): void {
   if (!process.stdin.isTTY)
@@ -26,14 +27,14 @@ function selected<T>(value: T): Exclude<T, symbol> {
   return value as Exclude<T, symbol>;
 }
 /** Pick a model, with an escape hatch for model names absent from local lists. */
-export async function pickModel(role: Role, models: Model[], current?: Model): Promise<Model> {
+export async function pickModel(role: string, models: Model[], current?: Model): Promise<Model> {
   requireTerminal();
   const choices = [
     ...new Map(models.map((model) => [`${model.harness}:${model.model}`, model])).values(),
   ];
   const choice = selected(
     await clack.select({
-      message: `Default ${role}`,
+      message: `Model for ${role}`,
       options: [
         ...choices.map((model) => ({
           value: `${model.harness}:${model.model}`,
@@ -63,36 +64,50 @@ export async function pickModel(role: Role, models: Model[], current?: Model): P
   ).trim();
   return { harness, model };
 }
-/** Refresh local model choices and explicitly save defaults. */
+/** Refresh local model choices, migrate legacy settings, and pick a model for every Role. */
 export async function configure(): Promise<void> {
   requireTerminal();
   const previous = existsSync(CONFIG_PATH) ? loadConfig() : undefined;
+  const legacy = previous ? legacyRoles(previous) : {};
+  const files = new Map(listRoles().map((role) => [role.name, role]));
   const codex = readCodexModels();
+
   clack.intro("larp configuration");
   clack.log.info(
     `Codex cache fetched: ${codex.fetchedAt ?? "unavailable"}. Run codex to refresh its cache.`
   );
-  const models = [...CLAUDE_MODELS, ...codex.models, ...(previous?.models ?? [])];
-  const defaults = {} as Record<Role, Model>;
-  for (const role of ROLES) {
-    defaults[role] = await pickModel(role, models, previous?.defaults[role]);
-    models.push(defaults[role]);
+
+  const models = [
+    ...CLAUDE_MODELS,
+    ...codex.models,
+    ...(previous?.models ?? []),
+    ...[...files.values()].map(({ harness, model }) => ({ harness, model })),
+  ];
+  const names = [...new Set([...ROLES, ...files.keys()])];
+
+  for (const name of names) {
+    const current: RoleDefinition | undefined = files.get(name) ?? legacy[name as Role];
+    const picked = await pickModel(
+      name,
+      models,
+      current ? { harness: current.harness, model: current.model } : undefined
+    );
+    models.push(picked);
+
+    const unchanged =
+      files.has(name) && current?.harness === picked.harness && current.model === picked.model;
+    if (unchanged) continue;
+
+    writeRole(current ? { ...current, ...picked } : builtInRole(name as Role, picked));
   }
-  const roles = Object.fromEntries(
-    ROLES.map((role) => [
-      role,
-      previous?.roles[role] ?? { effort: "high", extraArgs: { claude: [], codex: [] } },
-    ])
-  ) as Config["roles"];
+
   writeConfig({
     verbose: previous?.verbose ?? false,
     models: [
       ...new Map(models.map((model) => [`${model.harness}:${model.model}`, model])).values(),
     ],
-    defaults,
-    roles,
   });
-  clack.outro(`Saved ${CONFIG_PATH}`);
+  clack.outro(`Saved ${CONFIG_PATH} and ${ROLES_PATH}`);
 }
 /** Recognize only explicit @role interjections with a nonempty message. */
 export function parseInterjection(line: string): { role: Role; body: string } | null {

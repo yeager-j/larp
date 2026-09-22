@@ -1,6 +1,6 @@
 # LARP design (settled 2026-09-22)
 
-> Historical v1 document. The Implementer workflow and three-round limit below are superseded by [ADR 0003](./adr/0003-planning-ends-with-desktop-handoff.md): planning now ends with a Codex desktop handoff, and new Runs allow five review rounds. See README.md for current usage.
+> Historical v1 document. The Implementer workflow and three-round limit below are superseded by [ADR 0003](./adr/0003-planning-ends-with-desktop-handoff.md): planning now ends with a Codex desktop handoff, and new Runs allow five review rounds. Role configuration, `larp agent`, and the `larp plan` subcommands are described in [ADR 0004](./adr/0004-agents-started-by-harness-sessions.md). See README.md for current usage.
 
 Vocabulary is in [CONTEXT.md](../CONTEXT.md). Decisions with trade-offs are in [docs/adr](./adr). This file is the compact list of what was decided, for whoever builds it.
 

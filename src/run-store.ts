@@ -1,20 +1,11 @@
 import { randomUUID } from "node:crypto";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  truncateSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { Participant } from "./config.js";
 import { ROLES, type Entry, type Role } from "./message.js";
+import { appendLine, atomicWrite, nextTurnDir, readLines, tryAcquire } from "./store.js";
 import { ROUND_CAP } from "./workflow/plan.js";
 
 /** Persisted identity and recoverable delivery cache for a Run. */
@@ -90,38 +81,17 @@ export class RunStore {
   }
   /** Append a complete state-changing entry. */
   append(entry: Entry): void {
-    const path = join(this.directory, "messages.jsonl");
-    const content = readFileSync(path);
-    if (content.length && content[content.length - 1] !== 10)
-      truncateSync(path, content.lastIndexOf(10) + 1);
-    appendFileSync(path, JSON.stringify(entry) + "\n");
+    appendLine(join(this.directory, "messages.jsonl"), entry);
   }
   /** Exclude concurrent Relays; recover a lock left by a dead process. */
   acquire(): () => void {
-    const path = join(this.directory, "relay.lock");
-    if (existsSync(path)) {
-      const pid = Number(readFileSync(path, "utf8"));
-      if (!Number.isInteger(pid) || pid <= 0)
-        throw new Error("Invalid relay.lock; inspect it before removing it.");
-      try {
-        process.kill(pid, 0);
-        throw new Error(`Run already active in process ${pid}.`);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-      }
-      unlinkSync(path);
-    }
-    writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
-    return () => unlinkSync(path);
+    const lock = tryAcquire(join(this.directory, "relay.lock"));
+    if ("heldBy" in lock) throw new Error(`Run already active in process ${lock.heldBy}.`);
+    return lock.release;
   }
   /** Read entries in durable order; ignore a torn final line after a crash. */
   entries(): Entry[] {
-    const content = readFileSync(join(this.directory, "messages.jsonl"), "utf8");
-    return content
-      .split("\n")
-      .slice(0, -1)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Entry);
+    return readLines<Entry>(join(this.directory, "messages.jsonl"));
   }
   /** Persist a harness session for a Role. */
   setSession(role: Role, id: string): void {
@@ -143,30 +113,18 @@ export class RunStore {
   }
   /** Save a complete approved snapshot before opening the desktop composer. */
   writeHandoff(text: string): void {
-    this.atomicWrite(this.handoffPath, text);
+    atomicWrite(this.handoffPath, text);
   }
   /** Replace the Plan before appending its request entry. */
   writePlan(text: string): void {
-    this.atomicWrite(this.planPath, text);
-  }
-  /** Create a numbered raw-output directory; existing attempts are never overwritten. */
-  turnDir(n: number): string {
-    const path = join(this.directory, "turns", String(n).padStart(2, "0"));
-    mkdirSync(path, { recursive: true });
-    return path;
+    atomicWrite(this.planPath, text);
   }
   /** Allocate the next attempt directory, including after a crash. */
   nextTurnDir(): string {
-    const root = join(this.directory, "turns");
-    const numbers = existsSync(root) ? readdirSync(root).map(Number).filter(Number.isFinite) : [];
-    return this.turnDir(Math.max(0, ...numbers) + 1);
+    return nextTurnDir(this.directory);
   }
   private save(): void {
-    this.atomicWrite(join(this.directory, "run.json"), JSON.stringify(this.data, null, 2) + "\n");
-  }
-  private atomicWrite(path: string, text: string): void {
-    writeFileSync(`${path}.tmp`, text, { mode: 0o600 });
-    renameSync(`${path}.tmp`, path);
+    atomicWrite(join(this.directory, "run.json"), JSON.stringify(this.data, null, 2) + "\n");
   }
 }
 /** List saved Run identities without starting any harness. */

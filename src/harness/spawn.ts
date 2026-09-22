@@ -3,6 +3,8 @@ import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
+/** Set on every harness process so larp commands inside a Turn can refuse to start Turns. */
+export const TURN_ENV = "LARP_TURN";
 /** Signals stop the Relay without committing the interrupted Turn. */
 export class TurnInterrupted extends Error {}
 /** Run one child, persist raw streams, send the prompt and close stdin. */
@@ -21,6 +23,7 @@ export async function spawnTurn(input: {
   let error: string | undefined;
   const child = spawn(input.command, input.args, {
     cwd: input.cwd,
+    env: { ...process.env, [TURN_ENV]: "1" },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const lines = createInterface({ input: child.stdout });

@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { jsonEvent, spawnTurn } from "./spawn.js";
 import type { Harness, ParsedEvent, TurnRequest } from "./types.js";
 
+/** Final-message artifact: JSON for a structured reply, plain text otherwise. */
+export function lastMessagePath(req: Pick<TurnRequest, "turnDir" | "schema">): string {
+  return join(req.turnDir, req.schema ? "last.json" : "last.txt");
+}
 /** Build first/resumed exec arguments; cwd belongs to spawn, never -C. */
 export function buildCodexArgs(req: TurnRequest): string[] {
   const prompt = req.first ? `${req.rolePrompt}\n\n${req.prompt}` : req.prompt;
@@ -18,10 +22,9 @@ export function buildCodexArgs(req: TurnRequest): string[] {
     `model_reasoning_effort=${JSON.stringify(req.effort)}`,
     "-c",
     `sandbox_mode=${JSON.stringify(req.permission === "write" ? "workspace-write" : "read-only")}`,
-    "--output-schema",
-    join(req.turnDir, "schema.json"),
+    ...(req.schema ? ["--output-schema", join(req.turnDir, "schema.json")] : []),
     "-o",
-    join(req.turnDir, "last.json"),
+    lastMessagePath(req),
     "--",
     prompt,
   ];
@@ -52,11 +55,13 @@ export function parseCodexEvent(value: unknown): ParsedEvent {
   return parsed;
 }
 /** Read only the final-message artifact, treating malformed JSON as schema failure. */
-export function readCodexOutput(turnDir: string): unknown {
-  const path = join(turnDir, "last.json");
+export function readCodexOutput(req: Pick<TurnRequest, "turnDir" | "schema">): unknown {
+  const path = lastMessagePath(req);
   if (!existsSync(path)) return undefined;
+  const text = readFileSync(path, "utf8");
+  if (!req.schema) return text.trim() || undefined;
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(text);
   } catch {
     return undefined;
   }
@@ -65,7 +70,8 @@ export function readCodexOutput(turnDir: string): unknown {
 export const codexHarness: Harness = {
   id: "codex",
   async runTurn(req) {
-    writeFileSync(join(req.turnDir, "schema.json"), JSON.stringify(req.schema, null, 2));
+    if (req.schema)
+      writeFileSync(join(req.turnDir, "schema.json"), JSON.stringify(req.schema, null, 2));
     let sessionId = req.sessionId ?? "";
     const errors: string[] = [];
     const result = await spawnTurn({
@@ -86,7 +92,7 @@ export const codexHarness: Harness = {
     return {
       sessionId,
       exitCode: result.exitCode,
-      output: readCodexOutput(req.turnDir),
+      output: readCodexOutput(req),
       ...(errors.length ? { error: errors.join("\n") } : {}),
     };
   },

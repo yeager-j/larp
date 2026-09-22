@@ -105,11 +105,14 @@ test("Codex fixture shapes never turn agent messages into the final reply", (t) 
   );
   assert.equal(parseCodexEvent({ type: "error", message: "oops" }).error, "oops");
   const dir = tempDir(t);
-  assert.equal(readCodexOutput(dir), undefined);
+  const structured = { turnDir: dir, schema: {} };
+  assert.equal(readCodexOutput(structured), undefined);
   writeFileSync(join(dir, "last.json"), '{"kind":"approve","body":"ok"}');
-  assert.deepEqual(readCodexOutput(dir), { kind: "approve", body: "ok" });
+  assert.deepEqual(readCodexOutput(structured), { kind: "approve", body: "ok" });
   writeFileSync(join(dir, "last.json"), "invalid");
-  assert.equal(readCodexOutput(dir), undefined);
+  assert.equal(readCodexOutput(structured), undefined);
+  writeFileSync(join(dir, "last.txt"), "Plain reply\n");
+  assert.equal(readCodexOutput({ turnDir: dir }), "Plain reply");
 });
 test("spawn streams lines, respects cwd, captures stderr, and closes stdin", async (t) => {
   const dir = tempDir(t);
@@ -192,4 +195,45 @@ fs.writeFileSync(args[args.indexOf('-o')+1],JSON.stringify({kind:'approve',body:
     sessionId: codex.sessionId,
   });
   assert.deepEqual(resumedCodex.output, { kind: "approve", body: "envelope" });
+});
+
+test("without a schema, adapters omit schema flags and return the reply text", async (t) => {
+  const { mkdirSync } = await import("node:fs");
+  const { claudeHarness } = await import("./claude.js");
+  const { codexHarness } = await import("./codex.js");
+  const { schema: _schema, ...free } = req;
+  assert.ok(!buildClaudeArgs(free, "uuid").includes("--json-schema"));
+  assert.ok(!buildCodexArgs(free).includes("--output-schema"));
+  assert.equal(buildCodexArgs(free)[buildCodexArgs(free).indexOf("-o") + 1], "/turns/01/last.txt");
+  assert.equal(parseClaudeEvent({ type: "result", result: "Plain" }).text, "Plain");
+  assert.equal(
+    parseClaudeEvent({ type: "result", result: "Oops", is_error: true }).text,
+    undefined
+  );
+  const dir = tempDir(t);
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}:${previousPath}`;
+  t.after(() => {
+    process.env.PATH = previousPath;
+  });
+  writeFileSync(
+    join(bin, "claude"),
+    `#!${process.execPath}
+process.stdin.resume();process.stdin.on('end',()=>{
+console.log(JSON.stringify({type:'result',result:'Claude text ' + process.env.LARP_TURN}));});`,
+    { mode: 0o755 }
+  );
+  writeFileSync(
+    join(bin, "codex"),
+    `#!${process.execPath}
+const fs=require('fs');const args=process.argv.slice(2);process.stdin.resume();process.stdin.on('end',()=>{
+console.log(JSON.stringify({type:'thread.started',thread_id:'thread'}));
+fs.writeFileSync(args[args.indexOf('-o')+1],'Codex text\\n');});`,
+    { mode: 0o755 }
+  );
+  const request = { ...free, cwd: dir, turnDir: dir };
+  assert.equal((await claudeHarness.runTurn(request)).output, "Claude text 1");
+  assert.equal((await codexHarness.runTurn(request)).output, "Codex text");
 });

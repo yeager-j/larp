@@ -1,20 +1,20 @@
 # LARP (LLM Agent Relay Protocol)
 
-A relay that lets sessions on different coding harnesses (Claude Code, Codex) exchange messages and take turns on a shared task, without either harness knowing the other's API. LARP is not a harness: it moves Messages and starts Turns, nothing more.
+A relay that lets sessions on different coding harnesses (Claude Code, Codex) exchange messages and take turns on a shared task, without either harness knowing the other's API. LARP is not a harness: it moves Messages and starts Turns, nothing more. It runs Workflows, and it lets a harness session start a standalone Agent.
 
 ## Language
 
 **Harness**:
 A coding agent product that owns a session, its tools, and its permissions. Today: Claude Code and Codex.
-_Avoid_: Agent, CLI, tool
+_Avoid_: CLI, tool
 
 **Role**:
-A named job inside a Workflow, such as Planner or Reviewer. Implementation happens in a separate Codex desktop task. A Role says what a Participant is for and what it may touch.
-_Avoid_: Agent, persona
+A named definition of a job, stored as a Role file in `~/.config/larp/roles/`: its instructions, Harness, model, effort, and permission. A Workflow uses Roles by name, such as Planner and Reviewer, and may limit their permission. An Agent uses one Role directly. Implementation happens in a separate Codex desktop task.
+_Avoid_: persona, profile
 
 **Participant**:
-One Role bound to one model on one Harness session for the life of a Run. The Planner in a given Run is a Participant.
-_Avoid_: Agent, worker, bot
+One Role bound to one model on one Harness session for the life of a Run. The Planner in a given Run is a Participant. Outside a Run, see Agent.
+_Avoid_: worker, bot
 
 **Run**:
 One execution of a Workflow, from the task being given to the Workflow reaching a terminal state.
@@ -24,12 +24,20 @@ _Avoid_: Session, job
 A fixed arrangement of Roles and the rules for how Messages move between them. `larp plan` is the first Workflow.
 _Avoid_: Pipeline, graph, flow
 
+**Agent**:
+One Role started by a Caller with `larp agent start`, outside any Workflow. It owns one Harness session and a Message log, and the Caller continues it with `larp agent message`.
+_Avoid_: subagent, session, Participant
+
+**Caller**:
+The Harness session that runs `larp agent`. It receives each Agent reply on stdout. A Caller is never a Participant or an Agent: commands that start Turns refuse to run inside a Turn.
+_Avoid_: parent, user
+
 **Turn**:
-One Participant working once: it starts when the Relay delivers a Message to it and ends when its Harness process exits. Exactly one Turn is active in a Run at a time. A Participant may use its Harness's own subagents inside a Turn; that is invisible to LARP.
+One Participant or Agent working once: it starts when the Relay delivers a Message to it and ends when its Harness process exits. Exactly one Turn is active in a Run or an Agent at a time. A Participant may use its Harness's own subagents inside a Turn; that is invisible to LARP.
 _Avoid_: Step, invocation, call
 
 **Message**:
-A unit of communication from one Participant (or the Human) to another, carried by the Relay. It has a sender, a recipient, a Kind, and a body.
+A unit of communication from one Participant (or the Human) to another, or between a Caller and its Agent, carried by the Relay. It has a sender, a recipient, a Kind, and a body.
 _Avoid_: Prompt, event, request
 
 **Kind**:
@@ -37,7 +45,7 @@ The category of a Message that the Workflow uses to decide what happens next. So
 _Avoid_: Type, intent, verb
 
 **Relay**:
-The LARP process that owns the Message queue for a Run, delivers the next Message by starting a Turn, and waits for that Turn to end before delivering another.
+The LARP process that owns the Message queue for a Run or an Agent, delivers the next Message by starting a Turn, and waits for that Turn to end before delivering another.
 _Avoid_: Daemon, orchestrator, harness, coordinator
 
 **Human**:

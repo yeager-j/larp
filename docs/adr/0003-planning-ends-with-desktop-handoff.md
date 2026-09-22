@@ -12,6 +12,6 @@ Approval records the full current plan text in the log, including Human edits. T
 
 The link format was verified against the installed desktop app's route parser and handler. It is not a documented stable public API. The adapter is isolated in `src/handoff.ts` and currently uses macOS `open`. Successful dispatch does not prove that a task was created or implementation started.
 
-If opening fails, the approved Run stays in `handoff`. `larp resume` retries with the saved approved snapshot and does not repeat planning. A recorded successful handoff is terminal. A crash after opening but before recording success can open the composer again on resume; the deep link never auto-submits work.
+If opening fails, the approved Run stays in `handoff`. `larp plan resume` retries with the saved approved snapshot and does not repeat planning. A recorded successful handoff is terminal. A crash after opening but before recording success can open the composer again on resume; the deep link never auto-submits work.
 
 Old configuration files are accepted; obsolete Implementer settings are ignored. Completed legacy implementation Runs remain complete. Resuming an unfinished legacy Run after approval hands its plan to the desktop rather than starting another Implementer Turn.

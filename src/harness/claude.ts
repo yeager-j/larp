@@ -36,8 +36,7 @@ export function buildClaudeArgs(req: TurnRequest, sessionId: string): string[] {
     "--output-format",
     "stream-json",
     "--verbose",
-    "--json-schema",
-    JSON.stringify(req.schema),
+    ...(req.schema ? ["--json-schema", JSON.stringify(req.schema)] : []),
     "--append-system-prompt",
     req.rolePrompt,
     ...permissions,
@@ -69,6 +68,7 @@ export function parseClaudeEvent(value: unknown): ParsedEvent {
   }
   if (event.type === "result") {
     parsed.output = event.structured_output;
+    if (!event.is_error && typeof event.result === "string") parsed.text = event.result;
     const errors: string[] = [];
     if (event.is_error)
       errors.push(
@@ -89,7 +89,8 @@ export const claudeHarness: Harness = {
     const sessionId = req.sessionId ?? randomUUID();
     let output: unknown;
     const errors: string[] = [];
-    writeFileSync(join(req.turnDir, "schema.json"), JSON.stringify(req.schema, null, 2));
+    if (req.schema)
+      writeFileSync(join(req.turnDir, "schema.json"), JSON.stringify(req.schema, null, 2));
     const result = await spawnTurn({
       command: "claude",
       args: buildClaudeArgs(req, sessionId),
@@ -99,7 +100,8 @@ export const claudeHarness: Harness = {
       onLine(line) {
         const parsed = parseClaudeEvent(jsonEvent(line));
         for (const event of parsed.events) req.onEvent(event);
-        if (parsed.output !== undefined) output = parsed.output;
+        const reply = req.schema ? parsed.output : parsed.text;
+        if (reply !== undefined) output = reply;
         if (parsed.error) errors.push(parsed.error);
       },
     });

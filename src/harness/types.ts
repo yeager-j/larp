@@ -20,8 +20,8 @@ export interface TurnRequest {
   prompt: string;
   /** Whether this Role has no existing harness session. */
   first: boolean;
-  /** Required structured reply format. */
-  schema: object;
+  /** Required structured reply format; omit for a free-text reply. */
+  schema?: object;
   /** Existing harness session to resume. */
   sessionId?: string;
   /** Configured arguments for the harness executable. */
@@ -37,7 +37,7 @@ export interface TurnResult {
   sessionId: string;
   /** Harness process exit code. */
   exitCode: number;
-  /** Final structured reply, if produced. */
+  /** Final structured reply, or the reply text when the request had no schema. */
   output?: unknown;
   /** Harness or process error, if one occurred. */
   error?: string;
@@ -55,6 +55,8 @@ export interface ParsedEvent {
   events: HarnessEvent[];
   /** Structured reply found in the record. */
   output?: unknown;
+  /** Final reply text found in the record. */
+  text?: string;
   /** Error reported in the record. */
   error?: string;
   /** Session identifier found in the record. */
