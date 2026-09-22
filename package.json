@@ -1,6 +1,6 @@
 {
-  "name": "larp",
-  "version": "0.0.0",
+  "name": "larp-cli",
+  "version": "1.0.0",
   "description": "LLM Agent Relay Protocol: lets Claude Code and Codex sessions message each other without knowing each other's harness API.",
   "type": "module",
   "bin": {
