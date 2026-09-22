@@ -4,7 +4,7 @@ status: accepted
 
 # A Participant sends its Message by ending its Turn
 
-Both harnesses can enforce a JSON schema on a session's final answer (`claude -p --json-schema`, `codex exec --output-schema`), and both can run a Turn fully read-only. A `larp send` command run from inside a read-only Codex sandbox cannot write to disk, so it cannot enqueue anything. We therefore make the Turn's structured final answer the Message itself: the role prompt tells the Participant to reply with `{to, kind, body, ...}`, the Relay reads that object when the process exits, enqueues it, and starts the next Turn. There is no send command and no mid-Turn messaging.
+Both harnesses can enforce a JSON schema on a session's final answer (`claude -p --json-schema`, `codex exec --output-schema`), and both can run a Turn fully read-only. A `larp send` command run from inside a read-only Codex sandbox cannot write to disk, so it cannot enqueue anything. We therefore make the Turn's structured final answer the Message itself: the role prompt tells the Participant to reply with `{kind, body, ...}`; the recipient is fixed by the (Role, Kind) pair, so the model never chooses it, the Relay reads that object when the process exits, enqueues it, and starts the next Turn. There is no send command and no mid-Turn messaging.
 
 ## Considered options
 
