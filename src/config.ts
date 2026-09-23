@@ -22,6 +22,8 @@ export interface Participant extends Model {
   extraArgs: string[];
   /** Role instructions; absent on Runs created before Role files. */
   instructions?: string;
+  /** Web access; absent on Runs created before it existed, which run without it. */
+  web?: boolean;
 }
 /** Explicit user configuration written only by the config command. */
 export interface Config {
@@ -119,6 +121,7 @@ export function participantFor(role: RoleDefinition, override?: Model): Particip
     effort: role.effort,
     extraArgs: role.extraArgs[model.harness],
     instructions: role.instructions,
+    web: role.web,
   };
 }
 /** Resolve Workflow Roles and per-role overrides into durable Participants. */

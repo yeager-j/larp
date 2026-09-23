@@ -227,6 +227,7 @@ async function runParticipantTurn(
       ...participant,
       cwd: run.data.cwd,
       permission: "read-only",
+      web: participant.web ?? false,
       rolePrompt: participant.instructions
         ? `${ROLE_PROMPTS[role]}\n\n${participant.instructions}`
         : ROLE_PROMPTS[role],

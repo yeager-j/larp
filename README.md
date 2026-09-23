@@ -4,7 +4,7 @@
 
 A local relay between Claude Code and Codex. A Planner writes a plan, a Reviewer checks it, and a Human approves it. larp then opens the approved plan in a new Codex desktop composer and exits. Press Send in Codex to start implementation.
 
-A Claude Code or Codex session can also start a standalone Agent from a named Role, such as `larp agent start --role reviewer --message "Review my plan"`, without knowing which harness or model the Role uses.
+A Claude Code or Codex session can also start a standalone Agent from a named Role, such as `larp agent start --role reviewer --message "Review my plan"`, without knowing which harness or model the Role uses. `larp discuss` lets two models discuss a question until they agree.
 
 Requires Node.js 24 or later and authenticated `claude` and/or `codex` executables on PATH. Desktop handoff currently requires macOS with the Codex desktop app installed.
 
@@ -29,13 +29,14 @@ harness: codex
 model: gpt-5.6-sol
 effort: high
 permission: read-only
+web: true
 claude-args: []
 codex-args: []
 ---
 You are a reviewer. Read what you are pointed to, inspect repository evidence, and report material problems first with file references.
 ```
 
-`description`, `harness`, and `model` are required. `effort` defaults to `high` and `permission` to `read-only`; `write` lets an Agent edit the working tree. The args are JSON arrays passed to the matching harness. `schema` is an optional JSON Schema path, relative to the roles directory, that an Agent's reply must match. You can create Role files by hand; `larp config` offers a model picker for each one. Roles are read only from this directory, never from a repository.
+`description`, `harness`, and `model` are required. `effort` defaults to `high` and `permission` to `read-only`; `write` lets an Agent edit the working tree. `web` defaults to `true` and lets the model search and fetch the web (Claude `WebSearch` and `WebFetch`, Codex live `web_search`); set it to `false` for a Role that should use only local files and its own knowledge. The args are JSON arrays passed to the matching harness. `schema` is an optional JSON Schema path, relative to the roles directory, that an Agent's reply must match. You can create Role files by hand; `larp config` offers a model picker for each one. Roles are read only from this directory, never from a repository.
 
 The plan Workflow uses `planner` and `reviewer`. It adds its own protocol and reply schema before the Role's instructions and always runs both Roles read-only.
 
@@ -55,7 +56,7 @@ Output is grouped by Turn, with short tool summaries and a single formatted Mess
 
 New Runs allow up to five review rounds before the Phase Gate. The Phase Gate offers approval and desktop handoff, a message to the Planner, or abort. A Planner question before any plan exists offers a message or abort. The Failure Gate offers retry, retry with a note, or abort. Gates require a terminal; a non-interactive launch stops there with the Run saved for `larp plan resume`.
 
-Planner and Reviewer use the design's read-only permission profiles. Implementation uses the Codex desktop task's model and permission settings, with normal support for long-running commands and `run-and-queue`. There is no Implementer model setting or `--implementer` flag; old config entries for it are ignored. The Relay itself writes only configuration and Run artifacts, never repository files or git state.
+Planner and Reviewer use the design's read-only permission profiles. Implementation uses the Codex desktop task's model and permission settings, with normal support for long-running commands and `run-and-queue`. There is no Implementer model setting or `--implementer` flag; old config entries for it are ignored. Read-only Codex Turns pass `--skip-git-repo-check`, so larp also works outside a git repository. The Relay itself writes only configuration and Run artifacts, never repository files or git state.
 
 Runs live in `~/.larp/runs/<run-id>/`: metadata, append-only messages, `plan.md`, `handoff.md` after approval, and raw output for each Turn. Resume uses the original working directory and saved Participants. It restores the plan from the approved snapshot, or the latest Planner request before approval. You can edit the plan at a Gate before approving it in the same process. Interrupting a Turn leaves it pending for resume.
 
@@ -87,7 +88,34 @@ To teach a coding agent to use this, add something like the following to `CLAUDE
 Run `larp agent roles` to see the available larp Roles. To ask one for help, run
 `larp agent start --role <name> --message "<request>"` as a background command and read
 its output when it finishes. Continue with `larp agent message <id> --message "<text>"`.
+To have two models agree on an answer, run
+`larp discuss --author <role> --critic <role> --message "<question>"` in the background.
+Exit 2 means they did not agree; the output lists the open objections.
 ```
+
+## Discussions
+
+```sh
+larp discuss --author codex:gpt-5.6-sol --critic claude:claude-opus-5-5 --message "Evaluate this idea"
+larp discuss --author planner --critic reviewer --message "..." --blind --max-rounds 3
+larp discuss resume <discussion-id>
+larp discuss list
+larp discuss show <discussion-id>
+```
+
+A Discussion has two sides. The Author owns the proposal, and every Author reply contains the full proposal. The Critic replies to each proposal with a verdict, `agree` or `revise`, and always names the strongest objection it can make, even when it agrees. larp numbers each proposal and records which version each verdict answers, so an agreement always applies to one exact proposal. A round is one proposal and one verdict.
+
+`--author` and `--critic` each take `harness:model` (effort `high`, web access on, no extra args) or a Role name, whose instructions are added after the Discussion protocol. The same model may take both sides. `--max-rounds` defaults to 5 and accepts 1 to 10. With `--blind`, the Critic writes its own answer to the task before it sees the first proposal. The Author then sees that answer with the Critic's first verdict.
+
+The command blocks and prints the final proposal on stdout, then a footer:
+
+- Exit 0: the Critic agreed. The footer gives the Critic's remaining objection.
+- Exit 2: the round cap was reached. The footer gives the Critic's open objections to the last proposal.
+- Exit 1: a Turn failed or was interrupted. stderr gives the cause and the `larp discuss resume` command. An invalid reply is retried once with a note before the Discussion stops.
+
+stderr also gets a start line with the Discussion ID and one line as each Turn starts. Harness progress is saved in `~/.larp/discussions/<id>/turns/`. `resume` continues from the log; on a finished Discussion it prints the same result without starting a Turn. There are no Gates, so a coding agent can run the command in the background.
+
+Every Turn is read-only, whatever the Role's `permission` says. Role `claude-args` and `codex-args` still pass through unchanged, as in `larp plan` and `larp agent`. Args that bypass the sandbox or stop session persistence (such as Codex `--ephemeral`) break that guarantee or `resume`.
 
 ## Development
 

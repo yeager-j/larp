@@ -63,6 +63,7 @@ async function runAgentTurn(
       effort: participant.effort,
       extraArgs: participant.extraArgs,
       permission: participant.permission,
+      web: participant.web ?? false,
       rolePrompt: agentRolePrompt(participant.instructions),
       prompt: agentEnvelope(waiting),
       first: !sessionId,

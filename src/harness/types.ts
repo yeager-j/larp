@@ -14,6 +14,8 @@ export interface TurnRequest {
   effort: string;
   /** File access granted to the Turn. */
   permission: "read-only" | "write";
+  /** Whether the model may search and fetch the web. */
+  web: boolean;
   /** Role instructions supplied to the harness. */
   rolePrompt: string;
   /** Relay Envelope delivered to the Participant. */

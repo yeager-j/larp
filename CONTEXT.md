@@ -1,6 +1,6 @@
 # LARP (LLM Agent Relay Protocol)
 
-A relay that lets sessions on different coding harnesses (Claude Code, Codex) exchange messages and take turns on a shared task, without either harness knowing the other's API. LARP is not a harness: it moves Messages and starts Turns, nothing more. It runs Workflows, and it lets a harness session start a standalone Agent.
+A relay that lets sessions on different coding harnesses (Claude Code, Codex) exchange messages and take turns on a shared task, without either harness knowing the other's API. LARP is not a harness: it moves Messages and starts Turns, nothing more. It runs Workflows, lets a harness session start a standalone Agent, and runs Discussions between two models.
 
 ## Language
 
@@ -13,7 +13,7 @@ A named definition of a job, stored as a Role file in `~/.config/larp/roles/`: i
 _Avoid_: persona, profile
 
 **Participant**:
-One Role bound to one model on one Harness session for the life of a Run. The Planner in a given Run is a Participant. Outside a Run, see Agent.
+One Role, or one model with default settings, bound to one Harness session for the life of a Run or a Discussion. The Planner in a given Run and the Critic in a given Discussion are Participants. For a single session started by a Caller, see Agent.
 _Avoid_: worker, bot
 
 **Run**:
@@ -29,11 +29,11 @@ One Role started by a Caller with `larp agent start`, outside any Workflow. It o
 _Avoid_: subagent, session, Participant
 
 **Caller**:
-The Harness session that runs `larp agent`. It receives each Agent reply on stdout. A Caller is never a Participant or an Agent: commands that start Turns refuse to run inside a Turn.
+The person or Harness session that runs `larp agent` or `larp discuss`. It receives each Agent reply, or the Discussion result, on stdout. A Caller is never a Participant or an Agent: commands that start Turns refuse to run inside a Turn.
 _Avoid_: parent, user
 
 **Turn**:
-One Participant or Agent working once: it starts when the Relay delivers a Message to it and ends when its Harness process exits. Exactly one Turn is active in a Run or an Agent at a time. A Participant may use its Harness's own subagents inside a Turn; that is invisible to LARP.
+One Participant or Agent working once: it starts when the Relay delivers a Message to it and ends when its Harness process exits. Exactly one Turn is active in a Run, a Discussion, or an Agent at a time. A Participant may use its Harness's own subagents inside a Turn; that is invisible to LARP.
 _Avoid_: Step, invocation, call
 
 **Message**:
@@ -45,8 +45,32 @@ The category of a Message that the Workflow uses to decide what happens next. So
 _Avoid_: Type, intent, verb
 
 **Relay**:
-The LARP process that owns the Message queue for a Run or an Agent, delivers the next Message by starting a Turn, and waits for that Turn to end before delivering another.
+The LARP process that owns the Message queue for a Run, a Discussion, or an Agent, delivers the next Message by starting a Turn, and waits for that Turn to end before delivering another.
 _Avoid_: Daemon, orchestrator, harness, coordinator
+
+**Discussion**:
+Two Participants, the Author and the Critic, answering one Caller message until the Critic agrees with a Proposal or the round cap is reached. A Discussion is not a Run: it has no Phases, Gates, or Human, and it is stored apart from Runs and Agents.
+_Avoid_: debate, conversation, Run
+
+**Author**:
+The Participant in a Discussion that owns the Proposal. Every Author reply contains the full Proposal.
+_Avoid_: proposer, m1
+
+**Critic**:
+The Participant in a Discussion that gives a Verdict on each Proposal. In blind mode it first answers the task on its own.
+_Avoid_: reviewer (a Role name), m2
+
+**Proposal**:
+The Author's full answer in a Discussion. The Relay numbers each one (v1, v2, …); the model never sets the number.
+_Avoid_: draft (the Critic's blind answer), Plan
+
+**Verdict**:
+The Critic's reply to one Proposal version: `agree` or `revise`, with its strongest objection. Only a Verdict on the latest Proposal can end a Discussion.
+_Avoid_: approval, review
+
+**Round**:
+One Proposal and the Verdict on it. The Critic's blind answer is not part of a Round.
+_Avoid_: iteration, Turn
 
 **Human**:
 The person who started the Run. The Human can send Messages like any Participant and must approve phase gates.

@@ -6,7 +6,18 @@ import { parseArgs } from "node:util";
 
 import { deliver, formatReplies } from "./agent/run.js";
 import { AgentStore, listAgents } from "./agent/store.js";
-import { CONFIG_PATH, loadConfig, parseModel, participantsFor, type Model } from "./config.js";
+import {
+  CONFIG_PATH,
+  loadConfig,
+  parseModel,
+  participantFor,
+  participantsFor,
+  type Model,
+  type Participant,
+} from "./config.js";
+import { formatOutcome, runDiscussion } from "./discuss/run.js";
+import { DiscussionStore, listDiscussions } from "./discuss/store.js";
+import { DEFAULT_ROUNDS, MAX_ROUNDS } from "./discuss/workflow.js";
 import { openCodexHandoff } from "./handoff.js";
 import { claudeHarness } from "./harness/claude.js";
 import { codexHarness } from "./harness/codex.js";
@@ -28,12 +39,18 @@ larp agent message <agent-id> --message "<text>"
 larp agent roles
 larp agent list
 larp agent show <agent-id>
+larp discuss --author <role|harness:model> --critic <role|harness:model> --message "<text>" [--blind] [--max-rounds n]
+larp discuss resume <discussion-id>
+larp discuss list
+larp discuss show <discussion-id>
 
 During a plan Turn, type @planner <message> (or another active Role).
 larp agent start and message block until the reply is ready, then print it.
+larp discuss blocks until the Critic agrees (exit 0) or the round cap is reached (exit 2).
 Run them as background commands from a coding agent.
 
-Roles: ~/.config/larp/roles/. Runs: ~/.larp/runs/. Agents: ~/.larp/agents/.`;
+Roles: ~/.config/larp/roles/. Runs: ~/.larp/runs/. Agents: ~/.larp/agents/.
+Discussions: ~/.larp/discussions/.`;
 const harnesses = { claude: claudeHarness, codex: codexHarness };
 const MOVED: Record<string, string> = {
   resume: "larp plan resume",
@@ -47,6 +64,10 @@ type Options = {
   reviewer?: string;
   role?: string;
   message?: string;
+  author?: string;
+  critic?: string;
+  blind?: boolean;
+  "max-rounds"?: string;
 };
 
 /** Parse commands and run the requested workflow; exported for CLI tests. */
@@ -62,6 +83,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       reviewer: { type: "string" },
       role: { type: "string" },
       message: { type: "string" },
+      author: { type: "string" },
+      critic: { type: "string" },
+      blind: { type: "boolean" },
+      "max-rounds": { type: "string" },
     },
   });
   if (values.help || !positionals.length) {
@@ -72,11 +97,21 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, ...operands] = positionals;
   const planTask = command === "plan" && !["resume", "list", "show"].includes(operands[0]!);
   const agentTurn = command === "agent" && ["start", "message"].includes(operands[0]!);
+  const discussStart = command === "discuss" && !["resume", "list", "show"].includes(operands[0]!);
 
   if (!planTask && (values.pick || ROLES.some((role) => values[role])))
     throw new Error('Participant flags apply only to larp plan "<task>".');
-  if (!agentTurn && values.message !== undefined)
-    throw new Error("--message applies only to larp agent start and message.");
+  if (!agentTurn && !discussStart && values.message !== undefined)
+    throw new Error(
+      "--message applies only to larp agent start, larp agent message, and starting a larp discuss."
+    );
+  if (
+    !discussStart &&
+    [values.author, values.critic, values.blind, values["max-rounds"]].some((v) => v !== undefined)
+  )
+    throw new Error(
+      "--author, --critic, --blind, and --max-rounds apply only when starting a larp discuss."
+    );
   if (values.role && !(command === "agent" && operands[0] === "start"))
     throw new Error("--role applies only to larp agent start.");
 
@@ -87,6 +122,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   }
   if (command === "plan") return planCommand(operands, values);
   if (command === "agent") return agentCommand(operands, values);
+  if (command === "discuss") return discussCommand(operands, values);
   if (MOVED[command!]) throw new Error(`larp ${command} is now ${MOVED[command!]}.`);
 
   throw new Error(`Unknown command: ${command}\n${help}`);
@@ -247,6 +283,76 @@ async function sendAndPrint(agent: AgentStore, body: string): Promise<void> {
     throw new Error(
       `Agent ${id} Turn failed: ${delivery.error}\nThe message is still waiting. ${retry}`
     );
+}
+
+async function discussCommand(operands: string[], values: Options): Promise<void> {
+  const [subcommand, ...rest] = operands;
+
+  if (subcommand === "list") {
+    if (rest.length) throw new Error("Usage: larp discuss list");
+    for (const data of listDiscussions())
+      console.log(`${data.id}\t${data.createdAt}\t${data.task.replaceAll("\n", " ")}`);
+    return;
+  }
+
+  if (subcommand === "show") {
+    if (rest.length !== 1) throw new Error("Usage: larp discuss show <discussion-id>");
+    for (const item of DiscussionStore.open(rest[0]!).entries()) console.log(JSON.stringify(item));
+    return;
+  }
+
+  if (subcommand === "resume") {
+    if (rest.length !== 1) throw new Error("Usage: larp discuss resume <discussion-id>");
+    refuseInsideTurn("larp discuss resume");
+
+    await discussAndPrint(DiscussionStore.open(rest[0]!));
+    return;
+  }
+
+  const task = values.message?.trim();
+  if (operands.length || !task || !values.author || !values.critic)
+    throw new Error(
+      'Usage: larp discuss --author <role|harness:model> --critic <role|harness:model> --message "<text>" [--blind] [--max-rounds n]'
+    );
+  refuseInsideTurn("larp discuss");
+
+  const store = DiscussionStore.create({
+    task,
+    blind: values.blind ?? false,
+    maxRounds: parseRounds(values["max-rounds"]),
+    participants: {
+      author: parseParticipantSpec(values.author),
+      critic: parseParticipantSpec(values.critic),
+    },
+  });
+
+  console.error(`[larp] discussion ${store.data.id} started`);
+  await discussAndPrint(store);
+}
+
+async function discussAndPrint(store: DiscussionStore): Promise<void> {
+  const outcome = await runDiscussion(store, harnesses, (line) => console.error(line));
+
+  console.log(formatOutcome(store.data, outcome));
+  if (outcome.kind === "capped") process.exitCode = 2;
+}
+
+/** A value with a colon is harness:model with Role defaults; any other value names a Role file. */
+function parseParticipantSpec(value: string): Participant {
+  if (value.includes(":"))
+    return { ...parseModel(value), effort: "high", extraArgs: [], web: true };
+
+  return participantFor(loadRole(value));
+}
+
+function parseRounds(value?: string): number {
+  if (value === undefined) return DEFAULT_ROUNDS;
+
+  const rounds = Number(value);
+  if (!/^\d+$/.test(value) || rounds < 1 || rounds > MAX_ROUNDS)
+    throw new Error(`--max-rounds must be an integer from 1 to ${MAX_ROUNDS}.`);
+
+  return rounds;
 }
 
 function refuseInsideTurn(command: string): void {

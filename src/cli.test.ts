@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { writeConfig, type Config } from "./config.js";
+import { DiscussionStore } from "./discuss/store.js";
 import { ROLES } from "./message.js";
 import { builtInRole, writeRole } from "./roles.js";
 import { RunStore } from "./run-store.js";
@@ -36,7 +37,12 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({type:'result',result:mode + ' ' + (process.env.LARP_TURN ?? '') + ': ' + prompt.split('\\n').at(-1)}));
     return;
   }
-  const output = model === 'planner-model' ? {kind:'request',body:'plan',plan:'# Plan'} : {kind:'approve',body:'approved'};
+  const schema = args[args.indexOf('--json-schema') + 1];
+  const output = schema.includes('"verdict"')
+    ? {verdict: model === 'stubborn' ? 'revise' : 'agree', objection: 'minor', body: 'critic body'}
+    : schema.includes('"proposal"')
+      ? {proposal: '# Proposal', body: 'note'}
+      : model === 'planner-model' ? {kind:'request',body:'plan',plan:'# Plan'} : {kind:'approve',body:'approved'};
   console.log(JSON.stringify({type:'result',structured_output:output}));
 });`;
   writeFileSync(join(bin, "claude"), fake, { mode: 0o755 });
@@ -56,6 +62,7 @@ test("CLI help, missing config, moved and invalid commands, plan list and show",
   const help = invoke(home, ["--help"]).stdout;
   assert.match(help, /larp plan resume/);
   assert.match(help, /larp agent start --role/);
+  assert.match(help, /larp discuss --author/);
   assert.match(invoke(home, ["plan", "task"]).stderr, /larp config/);
   assert.equal(invoke(home, ["unknown"]).status, 1);
   assert.match(invoke(home, ["resume", "id"]).stderr, /now larp plan resume/);
@@ -124,6 +131,81 @@ test("CLI agent start and message print only replies and a footer, and resume th
     /No Role file/
   );
 });
+test("CLI discuss prints the agreed proposal, resolves Role specs, and replays on resume", (t) => {
+  const home = tempDir(t);
+  const path = fakeClaude(home);
+  configureHome(home);
+  const args = ["discuss", "--author", "claude:author-model", "--critic", "reviewer"];
+  const started = invoke(home, [...args, "--message", "Evaluate it"], path);
+  assert.equal(started.status, 0, started.stderr);
+  const id = /discussion ([\w-]+) started/.exec(started.stderr)![1]!;
+  assert.equal(
+    started.stdout,
+    `# Proposal\n\n---\n[larp] Agreed: the Critic accepted proposal v1 after 1 round.\n[larp] The Critic's remaining objection: minor\n[larp] discussion ${id} · author claude:author-model · critic claude:reviewer-model\n`
+  );
+  assert.match(started.stderr, /round 1 · critic \(claude:reviewer-model\) · verdict/);
+  const { participants, maxRounds, blind } = DiscussionStore.open(
+    id,
+    join(home, ".larp/discussions")
+  ).data;
+  assert.deepEqual([maxRounds, blind], [5, false]);
+  assert.equal(participants.author.instructions, undefined);
+  assert.equal(participants.author.web, true);
+  assert.match(participants.critic.instructions!, /You are a reviewer/);
+
+  const resumed = invoke(home, ["discuss", "resume", id], path);
+  assert.equal(resumed.status, 0, resumed.stderr);
+  assert.equal(resumed.stdout, started.stdout);
+  assert.match(invoke(home, ["discuss", "list"]).stdout, new RegExp(`^${id}\t.*\tEvaluate it`));
+  assert.equal(invoke(home, ["discuss", "show", id]).stdout.trim().split("\n").length, 2);
+});
+
+test("CLI discuss exits 2 at the round cap and validates its flags", (t) => {
+  const home = tempDir(t);
+  const path = fakeClaude(home);
+  const capped = invoke(
+    home,
+    ["discuss", "--author", "claude:a", "--critic", "claude:stubborn", "--message", "x"].concat([
+      "--blind",
+      "--max-rounds",
+      "2",
+    ]),
+    path
+  );
+  assert.equal(capped.status, 2, capped.stderr);
+  assert.match(capped.stdout, /No agreement after 2 rounds[\s\S]*Strongest objection: minor/);
+
+  const usage = invoke(home, ["discuss", "--author", "claude:a", "--message", "x"]);
+  assert.match(usage.stderr, /Usage: larp discuss --author/);
+  for (const rounds of ["0", "11", "2.5", "two"])
+    assert.match(
+      invoke(
+        home,
+        ["discuss", "--author", "claude:a", "--critic", "claude:b"].concat([
+          "--message",
+          "x",
+          "--max-rounds",
+          rounds,
+        ])
+      ).stderr,
+      /--max-rounds must be an integer from 1 to 10/
+    );
+  assert.match(
+    invoke(home, ["agent", "roles", "--blind"]).stderr,
+    /apply only when starting a larp discuss/
+  );
+  assert.match(
+    invoke(home, ["discuss", "resume", "id", "--author", "claude:a"]).stderr,
+    /apply only when starting a larp discuss/
+  );
+  assert.match(invoke(home, ["discuss", "list", "--message", "x"]).stderr, /--message applies/);
+  assert.match(
+    invoke(home, ["discuss", "--author", "missing", "--critic", "claude:b", "--message", "x"])
+      .stderr,
+    /No Role file/
+  );
+});
+
 test("CLI commands that start Turns refuse to run inside a larp Turn", (t) => {
   const home = tempDir(t);
   configureHome(home);
@@ -133,6 +215,8 @@ test("CLI commands that start Turns refuse to run inside a larp Turn", (t) => {
     ["agent", "message", "id", "--message", "x"],
     ["plan", "task"],
     ["plan", "resume", "id"],
+    ["discuss", "--author", "claude:a", "--critic", "claude:b", "--message", "x"],
+    ["discuss", "resume", "id"],
   ]) {
     const result = invoke(home, args, process.env.PATH, env);
     assert.equal(result.status, 1);

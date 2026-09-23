@@ -82,6 +82,7 @@ test("Participants copy Role settings for the chosen harness and Role instructio
     effort: "low",
     extraArgs: ["--x"],
     instructions: planner.instructions,
+    web: true,
   });
   assert.equal(resolved.reviewer.model, "haiku");
   assert.deepEqual(participantFor(reviewer).extraArgs, []);

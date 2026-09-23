@@ -22,6 +22,10 @@ export function buildCodexArgs(req: TurnRequest): string[] {
     `model_reasoning_effort=${JSON.stringify(req.effort)}`,
     "-c",
     `sandbox_mode=${JSON.stringify(req.permission === "write" ? "workspace-write" : "read-only")}`,
+    "-c",
+    `web_search=${JSON.stringify(req.web ? "live" : "disabled")}`,
+    // The trusted-directory check guards write access; read-only Turns may run outside a git repo.
+    ...(req.permission === "write" ? [] : ["--skip-git-repo-check"]),
     ...(req.schema ? ["--output-schema", join(req.turnDir, "schema.json")] : []),
     "-o",
     lastMessagePath(req),

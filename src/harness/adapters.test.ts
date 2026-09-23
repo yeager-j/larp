@@ -14,6 +14,7 @@ const req: TurnRequest = {
   model: "model",
   effort: "high",
   permission: "read-only",
+  web: false,
   rolePrompt: "protocol",
   prompt: "envelope",
   first: true,
@@ -36,6 +37,24 @@ test("Claude arguments preserve permissions and first/resumed session semantics"
   assert.ok(!resumed.includes("--session-id"));
   assert.ok(resumed.includes("--dangerously-skip-permissions"));
   assert.ok(!resumed.includes("--permission-mode"));
+  assert.ok(resumed.includes("WebSearch,WebFetch"));
+});
+test("Claude web access adds the web tools to read-only Turns and stops blocking them on write", () => {
+  const readOnly = buildClaudeArgs({ ...req, web: true }, "uuid");
+  assert.equal(
+    readOnly[readOnly.indexOf("--tools") + 1],
+    "Read,Glob,Grep,ToolSearch,Skill,Agent,Write,WebSearch,WebFetch"
+  );
+  assert.equal(
+    readOnly[readOnly.indexOf("--allowedTools") + 1],
+    "Read,Glob,Grep,ToolSearch,Skill,Agent,WebSearch,WebFetch"
+  );
+  assert.ok(!buildClaudeArgs(req, "uuid").join(" ").includes("Web"));
+  assert.ok(
+    !buildClaudeArgs({ ...req, web: true, permission: "write" }, "uuid")
+      .join(" ")
+      .includes("Web")
+  );
 });
 test("Claude fixture shapes include tool/text/thinking, structured output, and denial errors", () => {
   assert.deepEqual(
@@ -71,6 +90,8 @@ test("Codex prompt is positional on first and resumed Turns, with no -C", () => 
   assert.deepEqual(first.slice(0, 1), ["exec"]);
   assert.equal(first.at(-1), "protocol\n\nenvelope");
   assert.ok(first.includes('sandbox_mode="read-only"'));
+  assert.ok(first.includes('web_search="disabled"'));
+  assert.ok(first.includes("--skip-git-repo-check"));
   assert.ok(!first.includes("-C"));
   const resumed = buildCodexArgs({
     ...req,
@@ -81,6 +102,8 @@ test("Codex prompt is positional on first and resumed Turns, with no -C", () => 
   assert.deepEqual(resumed.slice(0, 3), ["exec", "resume", "thread"]);
   assert.equal(resumed.at(-1), "envelope");
   assert.ok(resumed.includes('sandbox_mode="workspace-write"'));
+  assert.ok(!resumed.includes("--skip-git-repo-check"));
+  assert.ok(buildCodexArgs({ ...req, web: true }).includes('web_search="live"'));
 });
 test("Codex fixture shapes never turn agent messages into the final reply", (t) => {
   assert.equal(

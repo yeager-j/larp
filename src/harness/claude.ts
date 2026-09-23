@@ -7,18 +7,22 @@ import type { Harness, ParsedEvent, TurnRequest } from "./types.js";
 
 /** Build Claude arguments with the design's exact permission profiles. */
 export function buildClaudeArgs(req: TurnRequest, sessionId: string): string[] {
+  const web = req.web ? ",WebSearch,WebFetch" : "";
   const permissions =
     req.permission === "write"
-      ? ["--dangerously-skip-permissions"]
+      ? [
+          "--dangerously-skip-permissions",
+          ...(req.web ? [] : ["--disallowedTools", "WebSearch,WebFetch"]),
+        ]
       : [
           "--permission-mode",
           "plan",
           "--permission-prompts",
           "none",
           "--tools",
-          "Read,Glob,Grep,ToolSearch,Skill,Agent,Write",
+          `Read,Glob,Grep,ToolSearch,Skill,Agent,Write${web}`,
           "--allowedTools",
-          "Read,Glob,Grep,ToolSearch,Skill,Agent",
+          `Read,Glob,Grep,ToolSearch,Skill,Agent${web}`,
           "--disallowedTools",
           "Bash,Edit,NotebookEdit,ExitPlanMode",
         ];

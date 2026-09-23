@@ -31,9 +31,14 @@ test("Role files apply defaults and keep colons in values and the body", () => {
     model: "gpt-test",
     effort: "high",
     permission: "read-only",
+    web: true,
     extraArgs: { claude: [], codex: [] },
     instructions: "Be precise.",
   });
+  assert.equal(
+    parseRole("checker", minimal.replace("model: gpt-test", "model: gpt-test\nweb: false")).web,
+    false
+  );
 });
 
 test("Role files reject invalid names, keys, and values", () => {
@@ -43,6 +48,7 @@ test("Role files reject invalid names, keys, and values", () => {
   assert.throws(() => parseRole("x", "no frontmatter"), /frontmatter/);
   assert.throws(() => parseRole("x", withLine("tools: Bash")), /unknown line/);
   assert.throws(() => parseRole("x", withLine("permission: admin")), /permission/);
+  assert.throws(() => parseRole("x", withLine("web: yes")), /web must be true or false/);
   assert.throws(() => parseRole("x", withLine("codex-args: --flag")), /JSON array/);
   assert.throws(() => parseRole("x", minimal.replace("codex", "gemini")), /harness/);
   assert.throws(() => parseRole("x", minimal.replace(/description.*\n/, "")), /description/);
@@ -53,6 +59,7 @@ test("rendered Roles parse back unchanged, and list and load use the file name",
   const role = {
     ...builtInRole("reviewer", { harness: "claude", model: "haiku" }),
     permission: "write" as const,
+    web: false,
     schema: "reviewer.schema.json",
     extraArgs: { claude: ["--flag", "a b"], codex: [] },
   };

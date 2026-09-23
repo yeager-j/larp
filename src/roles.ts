@@ -20,6 +20,8 @@ export interface RoleDefinition {
   effort: string;
   /** File access for an Agent. Workflows may apply a stricter limit. */
   permission: "read-only" | "write";
+  /** Whether the Role may search and fetch the web. Defaults to true. */
+  web: boolean;
   /** JSON Schema path for Agent replies, relative to the roles directory. */
   schema?: string;
   /** Additional arguments for each Harness. */
@@ -37,6 +39,7 @@ const KEYS = [
   "model",
   "effort",
   "permission",
+  "web",
   "schema",
   "claude-args",
   "codex-args",
@@ -69,6 +72,7 @@ export function builtInRole(
     ...model,
     effort: settings?.effort ?? "high",
     permission: "read-only",
+    web: true,
     extraArgs: settings?.extraArgs ?? { claude: [], codex: [] },
   };
 }
@@ -88,6 +92,7 @@ export function parseRole(name: string, text: string): RoleDefinition {
   const field = (key: Key) => fields.get(key);
   const harness = field("harness");
   const permission = field("permission") ?? "read-only";
+  const web = field("web") ?? "true";
 
   if (!field("description")) throw new Error(`Role ${name} needs a description.`);
   if (harness !== "claude" && harness !== "codex")
@@ -95,6 +100,7 @@ export function parseRole(name: string, text: string): RoleDefinition {
   if (!field("model")) throw new Error(`Role ${name} needs a model.`);
   if (permission !== "read-only" && permission !== "write")
     throw new Error(`Role ${name} permission must be read-only or write.`);
+  if (web !== "true" && web !== "false") throw new Error(`Role ${name} web must be true or false.`);
 
   const schema = field("schema");
 
@@ -105,6 +111,7 @@ export function parseRole(name: string, text: string): RoleDefinition {
     model: field("model")!,
     effort: field("effort") ?? "high",
     permission,
+    web: web === "true",
     ...(schema ? { schema } : {}),
     extraArgs: {
       claude: parseArgs(name, "claude-args", field("claude-args")),
@@ -156,6 +163,7 @@ export function renderRole(role: RoleDefinition): string {
     `model: ${role.model}`,
     `effort: ${role.effort}`,
     `permission: ${role.permission}`,
+    `web: ${role.web}`,
     ...(role.schema ? [`schema: ${role.schema}`] : []),
     `claude-args: ${JSON.stringify(role.extraArgs.claude)}`,
     `codex-args: ${JSON.stringify(role.extraArgs.codex)}`,
