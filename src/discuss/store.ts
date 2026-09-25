@@ -32,10 +32,13 @@ export interface DiscussEntry {
   /** Entry creation time in ISO 8601 format. */
   at: string;
   /** Origin of the entry. */
-  from: Side | "relay";
-  /** An Author proposal, a blind Critic draft, a Critic verdict, or a failed attempt. */
-  kind: "proposal" | "draft" | "verdict" | "failure";
-  /** Note to the other side, or a failure description. */
+  from: Side | "relay" | "caller";
+  /**
+   * An Author proposal, a blind Critic draft, a Critic verdict, a failed attempt, or a Caller
+   * follow-up that reopens a finished Discussion.
+   */
+  kind: "proposal" | "draft" | "verdict" | "failure" | "followup";
+  /** Note to the other side, a failure description, or the follow-up message. */
   body: string;
   /** Full proposal text of a proposal or draft. */
   proposal?: string;

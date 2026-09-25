@@ -99,6 +99,7 @@ Exit 2 means they did not agree; the output lists the open objections.
 larp discuss --author codex:gpt-5.6-sol --critic claude:claude-opus-5-5 --message "Evaluate this idea"
 larp discuss --author planner --critic reviewer --message "..." --blind --max-rounds 3
 larp discuss resume <discussion-id>
+larp discuss continue <discussion-id> --message "..."
 larp discuss list
 larp discuss show <discussion-id>
 ```
@@ -113,7 +114,9 @@ The command blocks and prints the final proposal on stdout, then a footer:
 - Exit 2: the round cap was reached. The footer gives the Critic's open objections to the last proposal.
 - Exit 1: a Turn failed or was interrupted. stderr gives the cause and the `larp discuss resume` command. An invalid reply is retried once with a note before the Discussion stops.
 
-stderr also gets a start line with the Discussion ID and one line as each Turn starts. Harness progress is saved in `~/.larp/discussions/<id>/turns/`. `resume` continues from the log; on a finished Discussion it prints the same result without starting a Turn. There are no Gates, so a coding agent can run the command in the background.
+stderr shows a live transcript: a start line with the Discussion ID, then each Turn's tool calls and progress, followed by what the Turn committed (the Author's note on each proposal, or the Critic's verdict, strongest objection, and requested changes). stdout gets only the final result. The raw harness output is also saved in `~/.larp/discussions/<id>/turns/`. `resume` continues from the log; on a finished Discussion it prints the same result without starting a Turn.
+
+`continue` reopens a finished Discussion with a follow-up, such as a new direction or a question. The Author gets the follow-up and the Critic's last verdict, and writes the next proposal version; the Critic then judges it against the task and the follow-up. Both sides keep their sessions, so each keeps its context. The round cap starts again after each follow-up, and the command prints and exits as above. A Discussion that has not finished must be resumed first. There are no Gates, so a coding agent can run the command in the background.
 
 Every Turn is read-only, whatever the Role's `permission` says. Role `claude-args` and `codex-args` still pass through unchanged, as in `larp plan` and `larp agent`. Args that bypass the sandbox or stop session persistence (such as Codex `--ephemeral`) break that guarantee or `resume`.
 

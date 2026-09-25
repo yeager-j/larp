@@ -33,8 +33,14 @@ export function discussEnvelope(input: {
   const proposal = proposals.at(-1);
   const verdict = entries.findLast((entry) => entry.kind === "verdict");
   const draft = entries.find((entry) => entry.kind === "draft");
+  const followupAt = entries.findLastIndex((entry) => entry.kind === "followup");
+  const followup = entries[followupAt];
+  const current = entries.slice(followupAt + 1);
   const author = data.participants.author.model;
   const critic = data.participants.critic.model;
+  const criticVerdict =
+    verdict &&
+    `Critic (${critic}) verdict on v${verdict.version}: ${verdict.verdict}\nStrongest objection: ${verdict.objection}\n\n${verdict.body}`;
   const lines: string[] = [];
 
   if (step.mode === "draft") {
@@ -45,6 +51,10 @@ export function discussEnvelope(input: {
   } else if (step.mode === "verdict") {
     lines.push(`Verdict Turn on proposal v${proposal!.version}.`);
     if (first) lines.push(`Task:\n${data.task}`);
+    if (followup && !current.some((entry) => entry.kind === "verdict"))
+      lines.push(
+        `After your last verdict, the Caller reopened the Discussion with this follow-up:\n${followup.body}\n\nJudge the proposal against the task and this follow-up.`
+      );
     if (draft && !verdict)
       lines.push("Compare the proposal with your own draft from your previous Turn.");
     lines.push(
@@ -54,11 +64,15 @@ export function discussEnvelope(input: {
   } else if (!proposal) {
     lines.push("Proposal Turn. Write the first proposal.");
     lines.push(`Task:\n${data.task}`);
+  } else if (followup && !current.some((entry) => entry.kind === "proposal")) {
+    lines.push(
+      `Proposal Turn. The Discussion ended with the Critic's verdict on v${proposal.version}, and the Caller has reopened it. Revise proposal v${proposal.version} to address the Caller's follow-up.`
+    );
+    lines.push(criticVerdict!);
+    lines.push(`Follow-up from the Caller:\n${followup.body}`);
   } else {
     lines.push(`Proposal Turn. Revise proposal v${proposal.version} after the Critic's verdict.`);
-    lines.push(
-      `Critic (${critic}) verdict on v${verdict!.version}: ${verdict!.verdict}\nStrongest objection: ${verdict!.objection}\n\n${verdict!.body}`
-    );
+    lines.push(criticVerdict!);
     if (draft && proposals.length === 1)
       lines.push(
         `The Critic's own answer, written before it saw your proposal:\n${draft.proposal}\n\nCritic's note:\n${draft.body}`

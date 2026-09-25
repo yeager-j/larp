@@ -37,6 +37,7 @@ function script(decide: (verdictNumber: number) => "agree" | "revise"): Reply {
 function fakeHarnesses(turns: TurnRequest[], reply: Reply): Record<"claude" | "codex", Harness> {
   const runTurn = async (req: TurnRequest): Promise<TurnResult> => {
     turns.push(req);
+    req.onEvent({ type: "text", text: `working on turn ${turns.length}` });
     return {
       sessionId: req.sessionId ?? `session-${req.model}`,
       exitCode: 0,
@@ -71,7 +72,12 @@ test("agreement in round 2 resumes each side's session and replays without new T
       turns,
       script((n) => (n === 2 ? "agree" : "revise"))
     ),
-    (line) => lines.push(line)
+    {
+      startTurn: ({ side, participant, round, mode }) =>
+        lines.push(`round ${round} · ${side} (${participant.model}) · ${mode}`),
+      event: (event) => lines.push(event.type === "text" ? event.text : event.type),
+      entry: (item) => lines.push(`${item.from} ${item.kind}`),
+    }
   );
 
   assert.equal(outcome.kind, "agreed");
@@ -96,7 +102,20 @@ test("agreement in round 2 resumes each side's session and replays without new T
   assert.match(turns[1]!.prompt, /^Verdict Turn on proposal v1\.\n\nTask:\nEvaluate the idea/);
   assert.match(turns[2]!.prompt, /verdict on v1: revise\nStrongest objection: objection 1/);
   assert.doesNotMatch(turns[3]!.prompt, /Task:/);
-  assert.equal(lines[3], "[larp] round 2 · critic (codex:critic-model) · verdict");
+  assert.deepEqual(lines, [
+    "round 1 · author (author-model) · propose",
+    "working on turn 1",
+    "author proposal",
+    "round 1 · critic (critic-model) · verdict",
+    "working on turn 2",
+    "critic verdict",
+    "round 2 · author (author-model) · propose",
+    "working on turn 3",
+    "author proposal",
+    "round 2 · critic (critic-model) · verdict",
+    "working on turn 4",
+    "critic verdict",
+  ]);
 
   const text = formatOutcome(store.data, outcome);
   assert.equal(
@@ -122,6 +141,73 @@ test("agreement in round 2 resumes each side's session and replays without new T
   );
   assert.equal(none.length, 0);
   assert.equal(formatOutcome(replayed.data, again), text);
+});
+
+test("a follow-up reopens an agreed Discussion with the Author, then the Critic", async (t) => {
+  const { root, store } = create(t, false);
+  const first: TurnRequest[] = [];
+  await runDiscussion(
+    store,
+    fakeHarnesses(
+      first,
+      script(() => "agree")
+    )
+  );
+
+  const turns: TurnRequest[] = [];
+  const shown: string[] = [];
+  const outcome = await runDiscussion(
+    DiscussionStore.open(store.data.id, root),
+    fakeHarnesses(
+      turns,
+      script((n) => (n === 2 ? "agree" : "revise"))
+    ),
+    { entry: (item) => shown.push(`${item.from} ${item.kind}`) },
+    "What about Windows?"
+  );
+
+  assert.equal(outcome.kind, "agreed");
+  assert.equal(outcome.proposal.version, 3);
+  assert.equal(outcome.rounds, 3);
+  assert.deepEqual(shown.slice(0, 2), ["caller followup", "author proposal"]);
+  assert.deepEqual(
+    turns.map((turn) => [turn.model, turn.sessionId]),
+    [
+      ["author-model", "session-author-model"],
+      ["critic-model", "session-critic-model"],
+      ["author-model", "session-author-model"],
+      ["critic-model", "session-critic-model"],
+    ]
+  );
+  assert.match(
+    turns[0]!.prompt,
+    /Caller has reopened it[\s\S]*verdict on v1: agree\nStrongest objection: objection 1[\s\S]*Follow-up from the Caller:\nWhat about Windows\?/
+  );
+  assert.match(
+    turns[1]!.prompt,
+    /Caller reopened the Discussion with this follow-up:\nWhat about Windows\?/
+  );
+  assert.doesNotMatch(turns[3]!.prompt, /What about Windows/);
+});
+
+test("a follow-up is refused while the Discussion has not finished", async (t) => {
+  const { store } = create(t, false);
+  const turns: TurnRequest[] = [];
+
+  await assert.rejects(
+    runDiscussion(
+      store,
+      fakeHarnesses(
+        turns,
+        script(() => "agree")
+      ),
+      {},
+      "More?"
+    ),
+    /It has not finished, so it cannot take a follow-up\.\nResume with: larp discuss resume/
+  );
+  assert.equal(turns.length, 0);
+  assert.deepEqual(store.entries(), []);
 });
 
 test("the round cap ends with the last proposal and the Critic's open objections", async (t) => {
@@ -197,14 +283,26 @@ test("an invalid reply is retried once with a note; a second one stops, and resu
       ? { output: { verdict: "agree", objection: "", body: "fine" } }
       : script(() => "agree")(req, n);
 
+  const attempts: string[] = [];
   await assert.rejects(
-    runDiscussion(store, fakeHarnesses(turns, bad)),
+    runDiscussion(store, fakeHarnesses(turns, bad), {
+      startTurn: ({ side, retry }) => attempts.push(`${side}${retry ? " retry" : ""}`),
+      entry: (item) => attempts.push(item.kind),
+    }),
     new RegExp(
       `^Error: Discussion ${store.data.id}: critic replied twice with an invalid reply\\.\\nResume with: larp discuss resume ${store.data.id}$`
     )
   );
   assert.equal(turns.length, 3);
   assert.match(turns[2]!.prompt, /previous reply to this Turn was rejected/);
+  assert.deepEqual(attempts, [
+    "author",
+    "proposal",
+    "critic",
+    "failure",
+    "critic retry",
+    "failure",
+  ]);
   assert.deepEqual(
     store.entries().map((entry) => entry.kind),
     ["proposal", "failure", "failure"]

@@ -49,7 +49,7 @@ The LARP process that owns the Message queue for a Run, a Discussion, or an Agen
 _Avoid_: Daemon, orchestrator, harness, coordinator
 
 **Discussion**:
-Two Participants, the Author and the Critic, answering one Caller message until the Critic agrees with a Proposal or the round cap is reached. A Discussion is not a Run: it has no Phases, Gates, or Human, and it is stored apart from Runs and Agents.
+Two Participants, the Author and the Critic, answering one Caller message until the Critic agrees with a Proposal or the round cap is reached. The Caller can reopen a finished Discussion with a follow-up, which goes to the Author first. A Discussion is not a Run: it has no Phases, Gates, or Human, and it is stored apart from Runs and Agents.
 _Avoid_: debate, conversation, Run
 
 **Author**:

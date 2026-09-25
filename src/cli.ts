@@ -15,6 +15,7 @@ import {
   type Model,
   type Participant,
 } from "./config.js";
+import { createDiscussOutput } from "./discuss/output.js";
 import { formatOutcome, runDiscussion } from "./discuss/run.js";
 import { DiscussionStore, listDiscussions } from "./discuss/store.js";
 import { DEFAULT_ROUNDS, MAX_ROUNDS } from "./discuss/workflow.js";
@@ -41,6 +42,7 @@ larp agent list
 larp agent show <agent-id>
 larp discuss --author <role|harness:model> --critic <role|harness:model> --message "<text>" [--blind] [--max-rounds n]
 larp discuss resume <discussion-id>
+larp discuss continue <discussion-id> --message "<text>"
 larp discuss list
 larp discuss show <discussion-id>
 
@@ -97,13 +99,15 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command, ...operands] = positionals;
   const planTask = command === "plan" && !["resume", "list", "show"].includes(operands[0]!);
   const agentTurn = command === "agent" && ["start", "message"].includes(operands[0]!);
-  const discussStart = command === "discuss" && !["resume", "list", "show"].includes(operands[0]!);
+  const discussStart =
+    command === "discuss" && !["resume", "continue", "list", "show"].includes(operands[0]!);
+  const discussContinue = command === "discuss" && operands[0] === "continue";
 
   if (!planTask && (values.pick || ROLES.some((role) => values[role])))
     throw new Error('Participant flags apply only to larp plan "<task>".');
-  if (!agentTurn && !discussStart && values.message !== undefined)
+  if (!agentTurn && !discussStart && !discussContinue && values.message !== undefined)
     throw new Error(
-      "--message applies only to larp agent start, larp agent message, and starting a larp discuss."
+      "--message applies only to larp agent start, larp agent message, starting a larp discuss, and larp discuss continue."
     );
   if (
     !discussStart &&
@@ -309,6 +313,16 @@ async function discussCommand(operands: string[], values: Options): Promise<void
     return;
   }
 
+  if (subcommand === "continue") {
+    const followup = values.message?.trim();
+    if (rest.length !== 1 || !followup)
+      throw new Error('Usage: larp discuss continue <discussion-id> --message "<text>"');
+    refuseInsideTurn("larp discuss continue");
+
+    await discussAndPrint(DiscussionStore.open(rest[0]!), followup);
+    return;
+  }
+
   const task = values.message?.trim();
   if (operands.length || !task || !values.author || !values.critic)
     throw new Error(
@@ -330,8 +344,15 @@ async function discussCommand(operands: string[], values: Options): Promise<void
   await discussAndPrint(store);
 }
 
-async function discussAndPrint(store: DiscussionStore): Promise<void> {
-  const outcome = await runDiscussion(store, harnesses, (line) => console.error(line));
+async function discussAndPrint(store: DiscussionStore, followup?: string): Promise<void> {
+  // stdout carries only the outcome, so the transcript goes to stderr.
+  const terminal = Boolean(process.stderr.isTTY) && process.env.TERM !== "dumb";
+  const ui = createDiscussOutput({
+    terminal,
+    cwd: store.data.cwd,
+    write: (line) => console.error(line),
+  });
+  const outcome = await runDiscussion(store, harnesses, ui, followup);
 
   console.log(formatOutcome(store.data, outcome));
   if (outcome.kind === "capped") process.exitCode = 2;

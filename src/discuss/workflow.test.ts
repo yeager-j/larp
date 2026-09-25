@@ -110,3 +110,35 @@ test("validators reject extra keys, empty text, and unknown verdicts", () => {
   assert.equal(validVerdict({ verdict: "agree", objection: "o", body: "b", x: 1 }), false);
   assert.equal(validVerdict([]), false);
 });
+
+test("a follow-up reopens a finished Discussion and restarts the round cap", () => {
+  const data = { blind: false, maxRounds: 2 };
+  const followup: DiscussEntry = { id: "u", at: "", from: "caller", kind: "followup", body: "?" };
+  const capped = [proposal(1), verdict(1, "revise"), proposal(2), verdict(2, "revise")];
+
+  assert.equal(nextStep(data, capped).kind, "capped");
+  assert.deepEqual(nextStep(data, [...capped, followup]), {
+    kind: "turn",
+    role: "author",
+    mode: "propose",
+  });
+  assert.deepEqual(nextStep(data, [...capped, followup, failure, proposal(3)]), {
+    kind: "turn",
+    role: "critic",
+    mode: "verdict",
+  });
+  assert.deepEqual(nextStep(data, [...capped, followup, proposal(3), verdict(3, "revise")]), {
+    kind: "turn",
+    role: "author",
+    mode: "propose",
+  });
+
+  const again = [...capped, followup, proposal(3), verdict(3, "revise")];
+  const entries = [...again, proposal(4), verdict(4, "revise")];
+  assert.deepEqual(nextStep(data, entries), {
+    kind: "capped",
+    proposal: entries[7],
+    verdict: entries[8],
+    rounds: 4,
+  });
+});

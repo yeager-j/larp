@@ -143,7 +143,10 @@ test("CLI discuss prints the agreed proposal, resolves Role specs, and replays o
     started.stdout,
     `# Proposal\n\n---\n[larp] Agreed: the Critic accepted proposal v1 after 1 round.\n[larp] The Critic's remaining objection: minor\n[larp] discussion ${id} · author claude:author-model · critic claude:reviewer-model\n`
   );
-  assert.match(started.stderr, /round 1 · critic \(claude:reviewer-model\) · verdict/);
+  assert.match(
+    started.stderr,
+    /> Round 1 · Critic · claude:reviewer-model · verdict\n\| HIDDEN PROGRESS\n[\s\S]*`- OK Agreed on proposal v1\n$/
+  );
   const { participants, maxRounds, blind } = DiscussionStore.open(
     id,
     join(home, ".larp/discussions")
@@ -156,8 +159,16 @@ test("CLI discuss prints the agreed proposal, resolves Role specs, and replays o
   const resumed = invoke(home, ["discuss", "resume", id], path);
   assert.equal(resumed.status, 0, resumed.stderr);
   assert.equal(resumed.stdout, started.stdout);
+  const continued = invoke(home, ["discuss", "continue", id, "--message", "And X?"], path);
+  assert.equal(continued.status, 0, continued.stderr);
+  assert.match(continued.stdout, /accepted proposal v2 after 2 rounds/);
+  assert.match(continued.stderr, /> Follow-up · Caller → Author\n\| And X\?\n\n> Round 2 · Author/);
+  assert.match(
+    invoke(home, ["discuss", "continue", id]).stderr,
+    /Usage: larp discuss continue <discussion-id> --message/
+  );
   assert.match(invoke(home, ["discuss", "list"]).stdout, new RegExp(`^${id}\t.*\tEvaluate it`));
-  assert.equal(invoke(home, ["discuss", "show", id]).stdout.trim().split("\n").length, 2);
+  assert.equal(invoke(home, ["discuss", "show", id]).stdout.trim().split("\n").length, 5);
 });
 
 test("CLI discuss exits 2 at the round cap and validates its flags", (t) => {
