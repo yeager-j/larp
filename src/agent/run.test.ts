@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } f
 import { join } from "node:path";
 import test from "node:test";
 
+import { TurnInterrupted } from "../harness/spawn.js";
 import type { Harness, TurnRequest, TurnResult } from "../harness/types.js";
 import { builtInRole } from "../roles.js";
 import { tempDir } from "../test-support.js";
@@ -64,7 +65,7 @@ test("first Turn starts a session with Role settings; later Turns resume it", as
   assert.deepEqual(delivery.status === "replied" && delivery.replies.map((reply) => reply.body), [
     "reply 1",
   ]);
-  assert.equal(turns[0]!.first, true);
+  assert.equal(turns[0]!.sessionId, undefined);
   assert.equal(turns[0]!.permission, "write");
   assert.equal(turns[0]!.schema, undefined);
   assert.equal(turns[0]!.prompt, "Review the plan");
@@ -72,7 +73,6 @@ test("first Turn starts a session with Role settings; later Turns resume it", as
 
   send(agent, "Again");
   await deliver(AgentStore.open(agent.data.id, root), harnesses(fake));
-  assert.equal(turns[1]!.first, false);
   assert.equal(turns[1]!.sessionId, "thread-1");
 
   const reopened = AgentStore.open(agent.data.id, root);
@@ -124,6 +124,66 @@ test("a message queued during a Turn is delivered by the same process in the nex
     ].join("\n")
   );
   assert.doesNotMatch(formatReplies(agent.data, replies.slice(0, 1), agent.entries()), /Reply to/);
+});
+
+test("an interrupted queued Turn still returns the replies committed before it", async (t) => {
+  const root = tempDir(t);
+  const agent = AgentStore.create(role, undefined, root, root);
+  const turns: TurnRequest[] = [];
+  const fake: Harness = {
+    id: "codex",
+    async runTurn(req) {
+      turns.push(req);
+      if (turns.length === 2) throw new TurnInterrupted("Turn interrupted by SIGINT.");
+
+      send(AgentStore.open(agent.data.id, root), "Queued");
+      return { sessionId: "thread-1", exitCode: 0, output: "reply 1" };
+    },
+  };
+
+  send(agent, "Review");
+  const delivery = await deliver(agent, harnesses(fake));
+
+  assert.equal(delivery.status, "interrupted");
+  assert.deepEqual(
+    delivery.status === "interrupted" && delivery.replies.map((reply) => reply.body),
+    ["reply 1"]
+  );
+  assert.deepEqual(
+    agent.undelivered().map((entry) => entry.body),
+    ["Queued"]
+  );
+  assert.ok("release" in agent.tryAcquire(), "the lock is released");
+});
+
+test("a Turn that cannot start still returns the replies committed before it", async (t) => {
+  const root = tempDir(t);
+  const agent = AgentStore.create(role, undefined, root, root);
+  const turns: TurnRequest[] = [];
+  const fake = fakeHarness(turns, (_req, n) => {
+    if (n === 1) send(AgentStore.open(agent.data.id, root), "Queued");
+    return {};
+  });
+  const allocate = agent.nextTurnDir.bind(agent);
+  let allocations = 0;
+
+  agent.nextTurnDir = () => {
+    if (++allocations === 2) throw new Error("disk full");
+    return allocate();
+  };
+
+  send(agent, "Review");
+  const delivery = await deliver(agent, harnesses(fake));
+
+  assert.equal(delivery.status, "failed");
+  assert.deepEqual(
+    delivery.status === "failed" && [delivery.error, delivery.replies.map((reply) => reply.body)],
+    ["Error: disk full", ["reply 1"]]
+  );
+  assert.deepEqual(
+    agent.undelivered().map((entry) => entry.body),
+    ["Queued"]
+  );
 });
 
 test("a live lock queues the message; a dead lock is recovered", async (t) => {
@@ -186,7 +246,7 @@ test("a failed Turn leaves its message waiting, and the next delivery carries it
 
   send(agent, "Second");
   await deliver(agent, harnesses(fakeHarness(turns)));
-  assert.equal(turns[1]!.first, true);
+  assert.equal(turns[1]!.sessionId, undefined);
   assert.match(turns[1]!.prompt, /First[\s\S]*Second/);
   assert.deepEqual(agent.undelivered(), []);
 });

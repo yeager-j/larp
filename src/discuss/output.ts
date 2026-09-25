@@ -29,7 +29,7 @@ export function createDiscussOutput(options: TranscriptOptions = {}): DiscussUI 
       }
       if (entry.kind === "failure") {
         note(entry.body);
-        transcript.end(`${symbols.fail} ${title(entry.role ?? "relay")} Turn failed`, 31);
+        transcript.end(`${symbols.fail} ${title(entry.role)} Turn failed`, 31);
         return;
       }
       if (entry.kind === "verdict") {

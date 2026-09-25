@@ -5,10 +5,15 @@ import test from "node:test";
 
 import { listRuns, RunStore } from "./run-store.js";
 import { message, participants, tempDir } from "./test-support.js";
+import { ROUND_CAP } from "./workflow/plan.js";
 
-test("Run store round trip and completed reply recover metadata", (t) => {
+test("Run store round trip keeps only identity in metadata", (t) => {
   const root = tempDir(t);
-  const run = RunStore.create("task", participants, root, root);
+  const run = RunStore.create(
+    { task: "task", participants, reviewRoundCap: ROUND_CAP },
+    root,
+    root
+  );
   run.writePlan("plan");
   const reply = message("planner", "request", "reviewer", {
     plan: "plan",
@@ -17,20 +22,18 @@ test("Run store round trip and completed reply recover metadata", (t) => {
   run.append(reply);
   const recovered = RunStore.open(run.data.id, root);
   assert.deepEqual(recovered.entries(), [reply]);
-  assert.equal(recovered.data.sessions.planner, "new-session");
-  assert.deepEqual(recovered.data.delivered, ["m1"]);
-  recovered.setSession("reviewer", "r");
-  recovered.markDelivered(["m2", "m1"]);
-  assert.deepEqual(RunStore.open(run.data.id, root).data.delivered, ["m1", "m2"]);
+  assert.deepEqual(recovered.data, run.data);
+  assert.equal(recovered.data.reviewRoundCap, ROUND_CAP);
   assert.equal(readFileSync(run.planPath, "utf8"), "plan");
   assert.match(run.nextTurnDir(), /01$/);
   assert.match(run.nextTurnDir(), /02$/);
   assert.equal(listRuns(root)[0]?.task, "task");
   assert.throws(() => RunStore.open("../outside", root), /Invalid/);
+  assert.throws(() => RunStore.open("missing", root), /No Run missing/);
 });
 test("torn trailing append is removed before the next complete entry", (t) => {
   const root = tempDir(t);
-  const run = RunStore.create("task", participants, root);
+  const run = RunStore.create({ task: "task", participants, reviewRoundCap: ROUND_CAP }, root);
   const first = message("human", "feedback", "planner");
   run.append(first);
   appendFileSync(join(run.directory, "messages.jsonl"), '{"id":"torn');
@@ -40,7 +43,10 @@ test("torn trailing append is removed before the next complete entry", (t) => {
   assert.equal(recovered.entries().length, 2);
 });
 test("only one Relay may acquire a Run", (t) => {
-  const run = RunStore.create("task", participants, tempDir(t));
+  const run = RunStore.create(
+    { task: "task", participants, reviewRoundCap: ROUND_CAP },
+    tempDir(t)
+  );
   const release = run.acquire();
   assert.throws(() => run.acquire(), /already active/);
   release();

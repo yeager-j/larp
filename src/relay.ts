@@ -3,16 +3,24 @@ import { readFileSync } from "node:fs";
 
 import type { Participant } from "./config.js";
 import { renderHandoff, type Handoff } from "./handoff.js";
-import { TurnInterrupted } from "./harness/spawn.js";
-import type { Harness, HarnessEvent, TurnResult } from "./harness/types.js";
-import { envelope, RECIPIENT, ROLES, type Entry, type Role } from "./message.js";
+import { attemptTurn, type TurnOutcome } from "./harness/turn.js";
+import type { Harness, HarnessEvent } from "./harness/types.js";
+import {
+  envelope,
+  isReply,
+  RECIPIENT,
+  ROLES,
+  type Entry,
+  type ReplyEntry,
+  type Role,
+} from "./message.js";
 import type { RunStore } from "./run-store.js";
+import type { Unsaved } from "./store.js";
 import {
   activeRoles,
-  initial,
   nextTurn,
   reduce,
-  reduceWithCap,
+  replay,
   schemaFor,
   validReply,
   type Phase,
@@ -42,19 +50,23 @@ export interface RelayUI {
   /** Display harness progress during a Turn. */
   event?(role: Role, model: string, event: HarnessEvent): void;
 }
-function entry(fields: Omit<Entry, "id" | "at">): Entry {
+function entry(fields: Unsaved<Entry>): Entry {
   return { id: randomUUID(), at: new Date().toISOString(), ...fields };
 }
-function waitingEntries(entries: Entry[], delivered: string[], role: Role): Entry[] {
-  const seen = new Set(delivered);
+/** Entries addressed to the Role that no committed reply has answered yet. */
+function waitingEntries(entries: Entry[], role: Role): Entry[] {
+  const seen = new Set(entries.filter(isReply).flatMap((reply) => reply.completion.delivered));
+
   return entries.filter(
     (item) =>
       !seen.has(item.id) &&
       (item.to === role ||
-        (item.to === "run" &&
-          item.role === role &&
-          (item.kind === "retry" || item.kind === "failure")))
+        ((item.kind === "retry" || item.kind === "failure") && item.role === role))
   );
+}
+/** Harness session from the Role's latest committed reply. */
+function sessionFor(entries: Entry[], role: Role): string | undefined {
+  return entries.filter(isReply).findLast((reply) => reply.from === role)?.completion.sessionId;
 }
 async function receiveInterjections(
   ui: RelayUI,
@@ -94,10 +106,7 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
   let displayedMessageId: string | undefined;
   while (true) {
     const entries = run.entries();
-    const state = entries.reduce(
-      (state, item) => reduceWithCap(state, item, run.data.reviewRoundCap ?? 3),
-      initial()
-    );
+    const state = replay(entries, run.data.reviewRoundCap);
     if (state.phase === "done" || state.phase === "handed-off" || state.phase === "aborted")
       return state.phase;
     if (state.phase === "handoff") {
@@ -116,13 +125,17 @@ async function relayLoop(opts: Parameters<typeof runRelay>[0]): Promise<Phase> {
 function restoreLatestPlan(run: RunStore): void {
   const latestPlan = run
     .entries()
-    .findLast(
-      (item) =>
-        item.plan &&
-        ((item.from === "planner" && item.kind === "request") ||
-          (item.from === "human" && item.kind === "approve"))
-    );
-  if (latestPlan?.plan) run.writePlan(latestPlan.plan);
+    .map(planSnapshot)
+    .findLast((plan) => plan);
+
+  if (latestPlan) run.writePlan(latestPlan);
+}
+/** The plan text that a Planner request or a Human approval saved. */
+function planSnapshot(item: Entry): string | undefined {
+  if (item.kind === "request" || (item.kind === "approve" && item.from === "human"))
+    return item.plan;
+
+  return undefined;
 }
 async function completeHandoff(
   opts: Parameters<typeof runRelay>[0],
@@ -158,15 +171,19 @@ async function handleGate(
 ): Promise<string | undefined> {
   if (state.phase === "failure") {
     const action = await ui.failureGate(state);
+
     run.append(
-      entry({
-        from: "human",
-        to: "run",
-        kind: action.kind,
-        body: action.kind === "retry" ? action.body : "",
-        ...(state.failure ? { role: state.failure.role } : {}),
-      })
+      action.kind === "retry"
+        ? entry({
+            from: "human",
+            to: "run",
+            kind: "retry",
+            role: state.failure!.role,
+            body: action.body,
+          })
+        : entry({ from: "human", to: "run", kind: "abort", body: "" })
     );
+
     return displayedMessageId;
   }
   const last = entries.findLast((item) => item.kind === "question" || item.from === "reviewer");
@@ -176,23 +193,26 @@ async function handleGate(
     displayedMessageId = last.id;
   }
   const action = await ui.phaseGate(state, state.lastPlanEntryId ? run.planPath : undefined);
-  if (action.kind === "approve" && !state.lastPlanEntryId) {
+
+  if (action.kind === "feedback")
+    run.append(entry({ from: "human", to: "planner", kind: "feedback", body: action.body }));
+  else if (action.kind === "abort")
+    run.append(entry({ from: "human", to: "run", kind: "abort", body: "" }));
+  else if (!state.lastPlanEntryId)
     ui.log("A plan is required before approval. Message the Planner or abort.");
-    return displayedMessageId;
-  }
-  const approvedPlan = action.kind === "approve" ? readFileSync(run.planPath, "utf8") : undefined;
-  if (approvedPlan !== undefined && !approvedPlan.trim())
-    throw new Error("The plan is empty. Restore it before approving.");
-  run.append(
-    entry({
-      from: "human",
-      to: action.kind === "feedback" ? "planner" : "run",
-      kind: action.kind,
-      body: action.kind === "feedback" ? action.body : "",
-      ...(approvedPlan !== undefined ? { plan: approvedPlan } : {}),
-    })
-  );
+  else
+    run.append(
+      entry({ from: "human", to: "run", kind: "approve", body: "", plan: approvedPlan(run) })
+    );
+
   return displayedMessageId;
+}
+/** Read the plan as the Human left it at the Gate, including edits. */
+function approvedPlan(run: RunStore): string {
+  const plan = readFileSync(run.planPath, "utf8");
+  if (!plan.trim()) throw new Error("The plan is empty. Restore it before approving.");
+
+  return plan;
 }
 async function runParticipantTurn(
   opts: Parameters<typeof runRelay>[0],
@@ -202,8 +222,8 @@ async function runParticipantTurn(
 ): Promise<string | undefined> {
   const { run, harnesses, participants, ui } = opts;
   const participant = participants[role];
-  const sessionId = run.data.sessions[role];
-  const waiting = waitingEntries(entries, run.data.delivered, role);
+  const sessionId = sessionFor(entries, role);
+  const waiting = waitingEntries(entries, role);
   const schema = schemaFor(role);
   const prompt = envelope({
     role,
@@ -215,15 +235,18 @@ async function runParticipantTurn(
     models: Object.fromEntries(ROLES.map((role) => [role, participants[role].model])),
     schemaReminder: `${JSON.stringify(schema)}. Current phase: ${state.phase}. `,
   });
+
   ui.startTurn?.(role, participant.model);
+
   const controller = new AbortController();
   let inputError: unknown;
   const interjections = receiveInterjections(ui, run, state, controller.signal).catch((error) => {
     inputError = error;
   });
-  let result: TurnResult;
+  let outcome: TurnOutcome;
+
   try {
-    result = await harnesses[participant.harness].runTurn({
+    outcome = await attemptTurn(harnesses[participant.harness], () => ({
       ...participant,
       cwd: run.data.cwd,
       permission: "read-only",
@@ -232,64 +255,65 @@ async function runParticipantTurn(
         ? `${ROLE_PROMPTS[role]}\n\n${participant.instructions}`
         : ROLE_PROMPTS[role],
       prompt,
-      first: !sessionId,
       schema,
       ...(sessionId ? { sessionId } : {}),
       turnDir: run.nextTurnDir(),
       onEvent: (event) => ui.event?.(role, participant.model, event),
-    });
-  } catch (error) {
-    if (error instanceof TurnInterrupted) throw error;
-    result = { sessionId: sessionId ?? "", exitCode: 1, error: String(error) };
+    }));
   } finally {
     controller.abort();
     await interjections;
   }
+
   if (inputError) throw inputError;
-  if (result.error || result.exitCode !== 0 || !result.sessionId) {
-    const body =
-      result.error ??
-      (result.exitCode !== 0
-        ? `Harness exited with code ${result.exitCode}.`
-        : "Harness returned no session ID.");
+
+  if (!outcome.ok) {
     run.append(
       entry({
         from: "relay",
         to: "run",
         kind: "failure",
         role,
-        reason: result.exitCode !== 0 ? "exit" : "error",
-        body,
+        reason: outcome.reason,
+        body: outcome.error,
       })
     );
-    if (ui.failure) ui.failure(role, body);
-    else ui.log(`Failure (${role}): ${body}`);
+    showFailure(ui, role, outcome.error);
     return;
   }
-  const output = result.output;
+
+  const { output } = outcome;
+  // RECIPIENT pairs each Role's reply Kind with its recipient, as the ReplyEntry variants do.
   const reply = validReply(role, output)
-    ? entry({
+    ? (entry({
         from: role,
         to: RECIPIENT[role][output.kind]!,
         kind: output.kind,
         body: output.body,
         ...(typeof output.plan === "string" ? { plan: output.plan } : {}),
-        completion: { sessionId: result.sessionId, delivered: waiting.map((item) => item.id) },
-      })
+        completion: { sessionId: outcome.sessionId, delivered: waiting.map((item) => item.id) },
+      } as Unsaved<ReplyEntry>) as ReplyEntry)
     : undefined;
+
   if (!reply || reduce(state, reply) === state) {
     const body = `Reply failed the ${role} schema or is invalid during ${state.phase}. Return exactly the requested JSON schema and a nonempty plan for request.`;
+
     run.append(entry({ from: "relay", to: "run", kind: "failure", role, reason: "schema", body }));
     if (!state.failure) run.append(entry({ from: "relay", to: "run", kind: "retry", role, body }));
-    if (ui.failure) ui.failure(role, body);
-    else ui.log(`Failure (${role}): ${body}`);
+    showFailure(ui, role, body);
     return;
   }
-  if (reply.plan) run.writePlan(reply.plan);
+
+  if (reply.kind === "request") run.writePlan(reply.plan);
   run.append(reply);
-  run.setSession(role, result.sessionId);
-  run.markDelivered(waiting.map((item) => item.id));
+
   if (ui.message) ui.message(reply);
   else ui.log(`${role} → ${reply.to} (${reply.kind}): ${reply.body}`);
+
   return reply.id;
+}
+
+function showFailure(ui: RelayUI, role: Role, body: string): void {
+  if (ui.failure) ui.failure(role, body);
+  else ui.log(`Failure (${role}): ${body}`);
 }

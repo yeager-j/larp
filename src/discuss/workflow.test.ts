@@ -12,6 +12,7 @@ const proposal = (version: number): DiscussEntry => ({
   body: "note",
   proposal: `v${version}`,
   version,
+  completion: { sessionId: "author" },
 });
 const verdict = (version: number, decision: "agree" | "revise"): DiscussEntry => ({
   id: `v${version}`,
@@ -22,6 +23,7 @@ const verdict = (version: number, decision: "agree" | "revise"): DiscussEntry =>
   verdict: decision,
   objection: "objection",
   version,
+  completion: { sessionId: "critic" },
 });
 const draft: DiscussEntry = {
   id: "d",
@@ -30,8 +32,16 @@ const draft: DiscussEntry = {
   kind: "draft",
   body: "note",
   proposal: "own",
+  completion: { sessionId: "critic" },
 };
-const failure: DiscussEntry = { id: "f", at: "", from: "relay", kind: "failure", body: "x" };
+const failure: DiscussEntry = {
+  id: "f",
+  at: "",
+  from: "relay",
+  kind: "failure",
+  role: "author",
+  body: "x",
+};
 
 test("normal order alternates Author and Critic until agreement", () => {
   const data = { blind: false, maxRounds: 5 };

@@ -100,7 +100,7 @@ export const claudeHarness: Harness = {
       args: buildClaudeArgs(req, sessionId),
       cwd: req.cwd,
       turnDir: req.turnDir,
-      stdin: req.first ? `${req.rolePrompt}\n\n${req.prompt}` : req.prompt,
+      stdin: req.sessionId ? req.prompt : `${req.rolePrompt}\n\n${req.prompt}`,
       onLine(line) {
         const parsed = parseClaudeEvent(jsonEvent(line));
         for (const event of parsed.events) req.onEvent(event);

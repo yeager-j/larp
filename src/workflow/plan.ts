@@ -1,4 +1,4 @@
-import { RECIPIENT, type Entry, type Role } from "../message.js";
+import { RECIPIENT, type Entry, type FailureEntry, type Role } from "../message.js";
 
 /** Durable workflow phases. */
 export type Phase = "planning" | "gate" | "handoff" | "failure" | "done" | "handed-off" | "aborted";
@@ -11,12 +11,14 @@ export interface PlanState {
   /** Role scheduled for the next Turn, if any. */
   pending: Role | null;
   /** Failure awaiting automatic retry or a Human decision. */
-  failure?: { role: Role; attempts: number; reason: Entry["reason"]; body: string };
+  failure?: { role: Role; attempts: number; reason: FailureEntry["reason"]; body: string };
   /** Entry containing the latest saved plan. */
   lastPlanEntryId?: string;
 }
 /** Maximum review rounds before human approval. */
 export const ROUND_CAP = 5;
+/** Review limit of legacy Runs, which saved no limit. */
+const LEGACY_ROUND_CAP = 3;
 /** Harness-compatible strict reply schema. Planner plan is null for non-request replies. */
 export function schemaFor(role: Role): object {
   const properties: Record<string, object> = {
@@ -63,6 +65,17 @@ export function initial(): PlanState {
 export function reduce(state: PlanState, entry: Entry): PlanState {
   return reduceWithCap(state, entry, ROUND_CAP);
 }
+/**
+ * Fold a whole Run log into its current state.
+ *
+ * @param savedRoundCap The Run's saved review limit; absent on legacy Runs, which keep their
+ *   original limit.
+ */
+export function replay(entries: Entry[], savedRoundCap: number | undefined): PlanState {
+  const roundCap = savedRoundCap ?? LEGACY_ROUND_CAP;
+
+  return entries.reduce((state, entry) => reduceWithCap(state, entry, roundCap), initial());
+}
 /** Replay older Runs using their original review limit. */
 export function reduceWithCap(state: PlanState, entry: Entry, roundCap: number): PlanState {
   if (state.phase === "done" || state.phase === "handed-off" || state.phase === "aborted")
@@ -93,7 +106,7 @@ export function reduceWithCap(state: PlanState, entry: Entry, roundCap: number):
       (entry.from === "human" || entry.from === "relay") &&
       entry.role === state.failure?.role
     ) {
-      const next = { ...state, phase: "planning" as const, pending: entry.role! };
+      const next = { ...state, phase: "planning" as const, pending: entry.role };
       if (entry.from === "human") delete next.failure;
       return next;
     }

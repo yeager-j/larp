@@ -5,10 +5,11 @@ import test from "node:test";
 
 import type { Handoff } from "./handoff.js";
 import type { Harness, TurnRequest, TurnResult } from "./harness/types.js";
-import type { Role } from "./message.js";
+import { isReply, type Role } from "./message.js";
 import { runRelay, type RelayUI } from "./relay.js";
 import { RunStore } from "./run-store.js";
 import { message, participants, tempDir } from "./test-support.js";
+import { ROUND_CAP } from "./workflow/plan.js";
 
 const plan = { kind: "request", body: "Review this", plan: "# Full plan" };
 const approve = { kind: "approve", body: "Looks good" };
@@ -57,11 +58,11 @@ function runWith(
 }
 test("happy path persists sessions, writes plan before message, and delivers queued messages once", async (t) => {
   const root = tempDir(t);
-  const run = RunStore.create("task", participants, root);
+  const run = RunStore.create({ task: "task", participants, reviewRoundCap: ROUND_CAP }, root);
   const turns: TurnRequest[] = [];
   const originalAppend = run.append.bind(run);
   run.append = (item) => {
-    if (item.plan) assert.equal(readFileSync(run.planPath, "utf8"), item.plan);
+    if (item.kind === "request") assert.equal(readFileSync(run.planPath, "utf8"), item.plan);
     originalAppend(item);
   };
   const fake = harness([plan, { kind: "feedback", body: "Improve tests" }, plan, approve], turns);
@@ -73,11 +74,18 @@ test("happy path persists sessions, writes plan before message, and delivers que
   assert.ok(turns.every((turn) => turn.permission === "read-only"));
   assert.ok(turns.every((turn) => !turn.rolePrompt.includes("undefined")));
   const opened = RunStore.open(run.data.id, root);
-  assert.deepEqual(Object.keys(opened.data.sessions).sort(), ["planner", "reviewer"]);
+  const sessionRoles = opened
+    .entries()
+    .filter(isReply)
+    .map((reply) => reply.from);
+  assert.deepEqual([...new Set(sessionRoles)].sort(), ["planner", "reviewer"]);
   assert.equal(opened.entries().at(-1)?.kind, "handoff");
 });
 test("interjections during a Turn wait for the next Envelope and inactive Roles are rejected", async (t) => {
-  const run = RunStore.create("task", participants, tempDir(t));
+  const run = RunStore.create(
+    { task: "task", participants, reviewRoundCap: ROUND_CAP },
+    tempDir(t)
+  );
   const turns: TurnRequest[] = [];
   let reader = 0;
   const logs: string[] = [];
@@ -106,7 +114,10 @@ test("interjections during a Turn wait for the next Envelope and inactive Roles 
 });
 test("one schema failure retries automatically; a second requires a Human retry with a note", async (t) => {
   for (const badCount of [1, 2]) {
-    const run = RunStore.create("task", participants, tempDir(t));
+    const run = RunStore.create(
+      { task: "task", participants, reviewRoundCap: ROUND_CAP },
+      tempDir(t)
+    );
     const turns: TurnRequest[] = [];
     let gates = 0;
     const fake = harness([...Array(badCount).fill({ kind: "invalid" }), plan, approve], turns);
@@ -133,7 +144,10 @@ test("harness exit, explicit error, and thrown errors go straight to Failure Gat
     { exitCode: 0, error: "denied" },
     new Error("spawn failed"),
   ]) {
-    const run = RunStore.create("task", participants, tempDir(t));
+    const run = RunStore.create(
+      { task: "task", participants, reviewRoundCap: ROUND_CAP },
+      tempDir(t)
+    );
     let calls = 0;
     const fake: Harness = {
       id: "claude",
@@ -155,7 +169,11 @@ test("harness exit, explicit error, and thrown errors go straight to Failure Gat
 });
 test("resume runs only the interrupted pending Role and restores Plan from the log", async (t) => {
   const root = tempDir(t);
-  const run = RunStore.create("task", participants, root, root);
+  const run = RunStore.create(
+    { task: "task", participants, reviewRoundCap: ROUND_CAP },
+    root,
+    root
+  );
   run.append(
     message("planner", "request", "reviewer", {
       plan: "# Committed plan",
@@ -176,7 +194,7 @@ test("resume runs only the interrupted pending Role and restores Plan from the l
 });
 test("resume lands on the same Failure Gate without launching a Turn", async (t) => {
   const root = tempDir(t);
-  const run = RunStore.create("task", participants, root);
+  const run = RunStore.create({ task: "task", participants, reviewRoundCap: ROUND_CAP }, root);
   run.append(
     message("relay", "failure", "run", { role: "planner", reason: "exit", body: "no access" })
   );
@@ -200,9 +218,9 @@ test("resume lands on the same Failure Gate without launching a Turn", async (t)
     "aborted"
   );
 });
-test("completed reply repairs stale delivery metadata, preventing redelivery after a crash", async (t) => {
+test("completed replies in the log decide delivery and sessions, preventing redelivery after a crash", async (t) => {
   const root = tempDir(t);
-  const run = RunStore.create("task", participants, root);
+  const run = RunStore.create({ task: "task", participants, reviewRoundCap: ROUND_CAP }, root);
   run.append(message("human", "feedback", "planner", { id: "note", body: "Already delivered" }));
   run.append(
     message("planner", "request", "reviewer", {
@@ -211,8 +229,13 @@ test("completed reply repairs stale delivery metadata, preventing redelivery aft
       completion: { sessionId: "s", delivered: ["note"] },
     })
   );
-  run.append(message("reviewer", "feedback", "planner", { id: "review", body: "New feedback" }));
-  writeFileSync(join(run.directory, "run.json"), JSON.stringify(run.data));
+  run.append(
+    message("reviewer", "feedback", "planner", {
+      id: "review",
+      body: "New feedback",
+      completion: { sessionId: "r", delivered: ["plan1"] },
+    })
+  );
   const turns: TurnRequest[] = [];
   assert.equal(
     await runWith(RunStore.open(run.data.id, root), harness([plan, approve], turns)),
@@ -223,7 +246,10 @@ test("completed reply repairs stale delivery metadata, preventing redelivery aft
   assert.equal(turns[0]?.sessionId, "s");
 });
 test("interjection input is cancelled before opening a Gate", async (t) => {
-  const run = RunStore.create("task", participants, tempDir(t));
+  const run = RunStore.create(
+    { task: "task", participants, reviewRoundCap: ROUND_CAP },
+    tempDir(t)
+  );
   let closed = 0;
   const interaction = ui({
     async *interjections(signal) {
@@ -242,7 +268,10 @@ test("interjection input is cancelled before opening a Gate", async (t) => {
 
 test("an interrupted Turn remains pending and releases the Run lock", async (t) => {
   const { TurnInterrupted } = await import("./harness/spawn.js");
-  const run = RunStore.create("task", participants, tempDir(t));
+  const run = RunStore.create(
+    { task: "task", participants, reviewRoundCap: ROUND_CAP },
+    tempDir(t)
+  );
   const fake: Harness = {
     id: "claude",
     async runTurn() {
@@ -256,7 +285,10 @@ test("an interrupted Turn remains pending and releases the Run lock", async (t) 
 
 test("approval snapshots edits, failed handoff resumes without Turns, and success is terminal", async (t) => {
   const root = tempDir(t);
-  const run = RunStore.create("Original task", participants, root);
+  const run = RunStore.create(
+    { task: "Original task", participants, reviewRoundCap: ROUND_CAP },
+    root
+  );
   const turns: TurnRequest[] = [];
   const fake = harness([plan, approve], turns);
   const gate = ui({
@@ -273,7 +305,11 @@ test("approval snapshots edits, failed handoff resumes without Turns, and succes
     /larp plan resume/
   );
   assert.equal(turns.length, 2);
-  assert.equal(run.entries().at(-1)?.plan, "# Human-edited approved plan");
+  const approval = run.entries().at(-1);
+  assert.equal(
+    approval?.from === "human" && approval.kind === "approve" && approval.plan,
+    "# Human-edited approved plan"
+  );
   run.writePlan("unapproved modification");
   let opens = 0;
   const resumed = RunStore.open(run.data.id, root);
@@ -297,7 +333,10 @@ test("approval snapshots edits, failed handoff resumes without Turns, and succes
 });
 
 test("completed legacy implementation Runs do not open a new task", async (t) => {
-  const run = RunStore.create("task", participants, tempDir(t));
+  const run = RunStore.create(
+    { task: "task", participants, reviewRoundCap: ROUND_CAP },
+    tempDir(t)
+  );
   run.append(message("planner", "request", "reviewer", { plan: "plan" }));
   run.append(message("reviewer", "approve", "planner"));
   run.append(message("human", "approve", "run"));
@@ -309,7 +348,10 @@ test("completed legacy implementation Runs do not open a new task", async (t) =>
 });
 
 test("legacy Runs retain their original three-round cap during replay", async (t) => {
-  const run = RunStore.create("old task", participants, tempDir(t));
+  const run = RunStore.create(
+    { task: "old task", participants, reviewRoundCap: ROUND_CAP },
+    tempDir(t)
+  );
   delete run.data.reviewRoundCap;
   for (let round = 0; round < 3; round++) {
     run.append(message("planner", "request", "reviewer", { id: `plan-${round}`, plan: "plan" }));
@@ -335,10 +377,13 @@ test("legacy Runs retain their original three-round cap during replay", async (t
 
 test("Role instructions follow the Workflow protocol, and permission stays read-only", async (t) => {
   const run = RunStore.create(
-    "task",
     {
-      ...participants,
-      reviewer: { ...participants.reviewer, instructions: "Focus on migrations." },
+      task: "task",
+      participants: {
+        ...participants,
+        reviewer: { ...participants.reviewer, instructions: "Focus on migrations." },
+      },
+      reviewRoundCap: ROUND_CAP,
     },
     tempDir(t)
   );

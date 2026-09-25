@@ -1,4 +1,4 @@
-import type { DiscussEntry, DiscussionData } from "./store.js";
+import type { DiscussEntry, DiscussionData, ProposalEntry, VerdictEntry } from "./store.js";
 
 /** Rounds allowed when the Caller does not choose. */
 export const DEFAULT_ROUNDS = 5;
@@ -39,9 +39,9 @@ export interface VerdictReply {
 export type Outcome = {
   kind: "agreed" | "capped";
   /** The latest proposal, which the verdict answers. */
-  proposal: DiscussEntry;
+  proposal: ProposalEntry;
   /** The Critic's verdict on that proposal. */
-  verdict: DiscussEntry;
+  verdict: VerdictEntry;
   /** Completed rounds across the whole Discussion, follow-ups included. */
   rounds: number;
 };

@@ -85,12 +85,12 @@ test("agreement in round 2 resumes each side's session and replays without new T
   assert.equal(outcome.proposal.proposal, "proposal from turn 3");
   assert.equal(outcome.rounds, 2);
   assert.deepEqual(
-    turns.map((turn) => [turn.model, turn.first, turn.sessionId]),
+    turns.map((turn) => [turn.model, turn.sessionId]),
     [
-      ["author-model", true, undefined],
-      ["critic-model", true, undefined],
-      ["author-model", false, "session-author-model"],
-      ["critic-model", false, "session-critic-model"],
+      ["author-model", undefined],
+      ["critic-model", undefined],
+      ["author-model", "session-author-model"],
+      ["critic-model", "session-critic-model"],
     ]
   );
   assert.ok(turns.every((turn) => turn.permission === "read-only"));
@@ -266,7 +266,6 @@ test("blind mode hides the first proposal from the Critic's draft and shows the 
   const [, draftTurn, verdictTurn, revision, secondVerdict] = turns;
   assert.match(draftTurn!.prompt, /^Draft Turn\./);
   assert.doesNotMatch(draftTurn!.prompt, /AUTHOR-SECRET-V1|AUTHOR-NOTE/);
-  assert.equal(verdictTurn!.first, false);
   assert.equal(verdictTurn!.sessionId, "session-critic-model");
   assert.match(verdictTurn!.prompt, /own draft[\s\S]*AUTHOR-SECRET-V1/);
   assert.doesNotMatch(verdictTurn!.prompt, /Task:/);
@@ -312,7 +311,7 @@ test("an invalid reply is retried once with a note; a second one stops, and resu
   const outcome = await runDiscussion(resumed, fakeHarnesses(turns, bad));
   assert.equal(outcome.kind, "agreed");
   assert.doesNotMatch(turns[3]!.prompt, /rejected/);
-  assert.equal(turns[3]!.first, true);
+  assert.equal(turns[3]!.sessionId, undefined);
 });
 
 test("a harness failure stops at once and records the failure", async (t) => {
@@ -328,7 +327,7 @@ test("a harness failure stops at once and records the failure", async (t) => {
   );
   assert.equal(turns.length, 1);
   assert.deepEqual(
-    store.entries().map((entry) => [entry.kind, entry.role]),
+    store.entries().map((entry) => [entry.kind, entry.kind === "failure" && entry.role]),
     [["failure", "author"]]
   );
 });

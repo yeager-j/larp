@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { setTimeout } from "node:timers/promises";
 
-import { appendRecord, readRecords } from "./store.js";
+import { appendRecord, readRecords, tryAcquireTurns } from "./store.js";
 import { tempDir } from "./test-support.js";
 
 const store = resolve("src/store.ts");
@@ -87,3 +89,63 @@ test("an append never truncates another writer's unfinished line", (t) => {
   assert.match(readFileSync(log, "utf8"), /^\{"id":"other-in-progress\n\{"id":"mine"\}\n$/);
   assert.deepEqual(readRecords(log), [{ id: "mine" }]);
 });
+
+test("a harness process that outlives a killed Relay blocks the next Turn until it exits", async (t) => {
+  const dir = tempDir(t);
+  const spawnModule = resolve("src/harness/spawn.ts");
+  const relay = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `
+        import { spawnTurn } from ${JSON.stringify(spawnModule)};
+        import { nextTurnDir, tryAcquireTurns } from ${JSON.stringify(store)};
+        tryAcquireTurns(${JSON.stringify(dir)}, "test.lock");
+        await spawnTurn({
+          command: "sleep",
+          args: ["30"],
+          cwd: ${JSON.stringify(dir)},
+          turnDir: nextTurnDir(${JSON.stringify(dir)}),
+          onLine() {},
+        });
+      `,
+    ],
+    { stdio: "ignore" }
+  );
+  const pidFile = join(dir, "turns", "01", "harness.pid");
+
+  while (!existsSync(pidFile)) await setTimeout(20);
+
+  const harnessPid = Number(readFileSync(pidFile, "utf8"));
+  t.after(() => killIfAlive(harnessPid));
+
+  relay.kill("SIGKILL");
+  await once(relay, "close");
+
+  assert.throws(() => tryAcquireTurns(dir, "test.lock"), /harness process \(PID \d+\)/);
+  assert.ok(!existsSync(join(dir, "test.lock")), "a refused acquire releases the lock");
+
+  process.kill(harnessPid, "SIGTERM");
+  while (isRunning(harnessPid)) await setTimeout(20);
+
+  const lock = tryAcquireTurns(dir, "test.lock");
+  assert.ok("release" in lock);
+  assert.ok(!existsSync(pidFile), "the stale record is removed");
+  lock.release();
+});
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function killIfAlive(pid: number): void {
+  if (isRunning(pid)) process.kill(pid, "SIGKILL");
+}

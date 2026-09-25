@@ -1,10 +1,17 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { Participant } from "../config.js";
-import { appendRecord, atomicWrite, nextTurnDir, readRecords, tryAcquire } from "../store.js";
+import {
+  appendRecord,
+  createArtifact,
+  listArtifacts,
+  logPath,
+  nextTurnDir,
+  openArtifact,
+  readRecords,
+  tryAcquireTurns,
+} from "../store.js";
 
 /** The two Participants in a Discussion. */
 export type Side = "author" | "critic";
@@ -25,36 +32,67 @@ export interface DiscussionData {
   /** Discussion creation time in ISO 8601 format. */
   createdAt: string;
 }
-/** One durable Discussion log entry. */
-export interface DiscussEntry {
+/** Fields every Discussion log entry has. */
+interface EntryFields {
   /** Unique log entry identifier. */
   id: string;
   /** Entry creation time in ISO 8601 format. */
   at: string;
-  /** Origin of the entry. */
-  from: Side | "relay" | "caller";
-  /**
-   * An Author proposal, a blind Critic draft, a Critic verdict, a failed attempt, or a Caller
-   * follow-up that reopens a finished Discussion.
-   */
-  kind: "proposal" | "draft" | "verdict" | "failure" | "followup";
   /** Note to the other side, a failure description, or the follow-up message. */
   body: string;
-  /** Full proposal text of a proposal or draft. */
-  proposal?: string;
-  /** Proposal version, set by the Relay on proposals and on the verdicts that answer them. */
-  version?: number;
-  /** The Critic's decision on one proposal version. */
-  verdict?: "agree" | "revise";
-  /** The strongest objection the Critic gave with its verdict. */
-  objection?: string;
-  /** Side whose Turn failed. */
-  role?: Side;
-  /** Harness session that produced the entry. */
-  completion?: { sessionId: string };
 }
+/** An Author proposal. */
+export interface ProposalEntry extends EntryFields {
+  from: "author";
+  kind: "proposal";
+  /** Full proposal text. */
+  proposal: string;
+  /** Proposal version, set by the Relay in log order. */
+  version: number;
+  /** Harness session that produced the proposal. */
+  completion: { sessionId: string };
+}
+/** The Critic's blind answer, written before it sees the first proposal. */
+export interface DraftEntry extends EntryFields {
+  from: "critic";
+  kind: "draft";
+  /** Full text of the Critic's own answer. */
+  proposal: string;
+  /** Harness session that produced the draft. */
+  completion: { sessionId: string };
+}
+/** The Critic's decision on one proposal version. */
+export interface VerdictEntry extends EntryFields {
+  from: "critic";
+  kind: "verdict";
+  verdict: "agree" | "revise";
+  /** The strongest objection the Critic gave with its verdict. */
+  objection: string;
+  /** Version of the proposal that the verdict answers. */
+  version: number;
+  /** Harness session that produced the verdict. */
+  completion: { sessionId: string };
+}
+/** A failed or invalid Turn attempt. */
+export interface FailureEntry extends EntryFields {
+  from: "relay";
+  kind: "failure";
+  /** Side whose Turn failed. */
+  role: Side;
+}
+/** A Caller follow-up that reopens a finished Discussion. */
+export interface FollowupEntry extends EntryFields {
+  from: "caller";
+  kind: "followup";
+}
+/** An entry that a side's Turn committed. */
+type SideEntry = ProposalEntry | DraftEntry | VerdictEntry;
+/** One durable Discussion log entry. */
+export type DiscussEntry = ProposalEntry | DraftEntry | VerdictEntry | FailureEntry | FollowupEntry;
 /** Default Discussion storage, separate from Runs, Agents, and the working repository. */
 export const DISCUSSIONS_PATH = join(homedir(), ".larp/discussions");
+
+const METADATA_FILE = "discussion.json";
 
 /** Append-only Discussion log with a process lock that serializes Turns. */
 export class DiscussionStore {
@@ -63,7 +101,7 @@ export class DiscussionStore {
   /** Saved identity and Participants. */
   readonly data: DiscussionData;
 
-  private constructor(directory: string, data: DiscussionData) {
+  private constructor({ directory, data }: { directory: string; data: DiscussionData }) {
     this.directory = directory;
     this.data = data;
   }
@@ -74,33 +112,14 @@ export class DiscussionStore {
     root = DISCUSSIONS_PATH,
     cwd = process.cwd()
   ): DiscussionStore {
-    const id = randomUUID();
-    const directory = join(root, id);
-    const data: DiscussionData = {
-      id,
-      ...input,
-      cwd: resolve(cwd),
-      createdAt: new Date().toISOString(),
-    };
-
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    writeFileSync(join(directory, "messages.jsonl"), "", { mode: 0o600 });
-    atomicWrite(join(directory, "discussion.json"), JSON.stringify(data, null, 2) + "\n");
-
-    return new DiscussionStore(directory, data);
+    return new DiscussionStore(
+      createArtifact(root, METADATA_FILE, { ...input, cwd: resolve(cwd) })
+    );
   }
 
   /** Open a saved Discussion by ID. */
   static open(id: string, root = DISCUSSIONS_PATH): DiscussionStore {
-    if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid Discussion ID.");
-
-    const directory = join(root, id);
-    if (!existsSync(join(directory, "discussion.json"))) throw new Error(`No Discussion ${id}.`);
-
-    return new DiscussionStore(
-      directory,
-      JSON.parse(readFileSync(join(directory, "discussion.json"), "utf8"))
-    );
+    return new DiscussionStore(openArtifact<DiscussionData>(root, id, METADATA_FILE, "Discussion"));
   }
 
   /**
@@ -109,23 +128,27 @@ export class DiscussionStore {
    * @throws When the entry cannot be read back after three attempts.
    */
   append(entry: DiscussEntry): void {
-    appendRecord(join(this.directory, "messages.jsonl"), entry);
+    appendRecord(logPath(this.directory), entry);
   }
 
   /** Read complete entries in durable order. */
   entries(): DiscussEntry[] {
-    return readRecords<DiscussEntry>(join(this.directory, "messages.jsonl"));
+    return readRecords<DiscussEntry>(logPath(this.directory));
   }
 
   /** Harness session from the side's latest committed entry, read fresh from the log. */
   sessionId(side: Side): string | undefined {
-    return this.entries().findLast((entry) => entry.from === side && entry.completion)?.completion
-      ?.sessionId;
+    return this.entries().findLast((entry): entry is SideEntry => entry.from === side)?.completion
+      .sessionId;
   }
 
-  /** Take the Turn lock, or report the live process that holds it. */
-  tryAcquire(): ReturnType<typeof tryAcquire> {
-    return tryAcquire(join(this.directory, "discussion.lock"));
+  /**
+   * Take the Turn lock, or report the live process that holds it.
+   *
+   * @throws When a harness process from an earlier Turn is still running.
+   */
+  tryAcquire(): ReturnType<typeof tryAcquireTurns> {
+    return tryAcquireTurns(this.directory, "discussion.lock");
   }
 
   /** Allocate the next raw-output directory. */
@@ -136,12 +159,5 @@ export class DiscussionStore {
 
 /** List saved Discussion identities, newest first. */
 export function listDiscussions(root = DISCUSSIONS_PATH): DiscussionData[] {
-  if (!existsSync(root)) return [];
-
-  return readdirSync(root)
-    .filter((id) => existsSync(join(root, id, "discussion.json")))
-    .map(
-      (id) => JSON.parse(readFileSync(join(root, id, "discussion.json"), "utf8")) as DiscussionData
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return listArtifacts<DiscussionData>(root, METADATA_FILE);
 }

@@ -1,11 +1,18 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { participantFor, type Participant } from "../config.js";
 import type { RoleDefinition } from "../roles.js";
-import { appendRecord, atomicWrite, nextTurnDir, readRecords, tryAcquire } from "../store.js";
+import {
+  appendRecord,
+  createArtifact,
+  listArtifacts,
+  logPath,
+  nextTurnDir,
+  openArtifact,
+  readRecords,
+  tryAcquireTurns,
+} from "../store.js";
 
 /** A Role snapshot saved for the life of an Agent. */
 export interface AgentParticipant extends Participant {
@@ -46,6 +53,7 @@ export interface AgentEntry {
 }
 /** Default Agent storage, separate from Runs and the working repository. */
 export const AGENTS_PATH = join(homedir(), ".larp/agents");
+const METADATA_FILE = "agent.json";
 
 /** Append-only Agent log with a process lock that serializes Turns. */
 export class AgentStore {
@@ -54,7 +62,7 @@ export class AgentStore {
   /** Saved identity and Role snapshot. */
   readonly data: AgentData;
 
-  private constructor(directory: string, data: AgentData) {
+  private constructor({ directory, data }: { directory: string; data: AgentData }) {
     this.directory = directory;
     this.data = data;
   }
@@ -66,38 +74,22 @@ export class AgentStore {
     root = AGENTS_PATH,
     cwd = process.cwd()
   ): AgentStore {
-    const id = randomUUID();
-    const directory = join(root, id);
-    const data: AgentData = {
-      id,
-      role: role.name,
-      participant: {
-        ...participantFor(role),
-        permission: role.permission,
-        ...(schema ? { schema } : {}),
-      },
-      cwd: resolve(cwd),
-      createdAt: new Date().toISOString(),
-    };
-
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    writeFileSync(join(directory, "messages.jsonl"), "", { mode: 0o600 });
-    atomicWrite(join(directory, "agent.json"), JSON.stringify(data, null, 2) + "\n");
-
-    return new AgentStore(directory, data);
+    return new AgentStore(
+      createArtifact(root, METADATA_FILE, {
+        role: role.name,
+        participant: {
+          ...participantFor(role),
+          permission: role.permission,
+          ...(schema ? { schema } : {}),
+        },
+        cwd: resolve(cwd),
+      })
+    );
   }
 
   /** Open a saved Agent by ID. */
   static open(id: string, root = AGENTS_PATH): AgentStore {
-    if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid Agent ID.");
-
-    const directory = join(root, id);
-    if (!existsSync(join(directory, "agent.json"))) throw new Error(`No Agent ${id}.`);
-
-    return new AgentStore(
-      directory,
-      JSON.parse(readFileSync(join(directory, "agent.json"), "utf8"))
-    );
+    return new AgentStore(openArtifact<AgentData>(root, id, METADATA_FILE, "Agent"));
   }
 
   /**
@@ -106,12 +98,12 @@ export class AgentStore {
    * @throws When the entry cannot be read back after three attempts.
    */
   append(entry: AgentEntry): void {
-    appendRecord(join(this.directory, "messages.jsonl"), entry);
+    appendRecord(logPath(this.directory), entry);
   }
 
   /** Read complete entries in durable order. */
   entries(): AgentEntry[] {
-    return readRecords<AgentEntry>(join(this.directory, "messages.jsonl"));
+    return readRecords<AgentEntry>(logPath(this.directory));
   }
 
   /** Caller messages that no committed reply has answered, read fresh from the log. */
@@ -127,9 +119,13 @@ export class AgentStore {
     return this.entries().findLast((entry) => entry.completion)?.completion?.sessionId;
   }
 
-  /** Take the Turn lock, or report the live process that holds it. */
-  tryAcquire(): ReturnType<typeof tryAcquire> {
-    return tryAcquire(join(this.directory, "agent.lock"));
+  /**
+   * Take the Turn lock, or report the live process that holds it.
+   *
+   * @throws When a harness process from an earlier Turn is still running.
+   */
+  tryAcquire(): ReturnType<typeof tryAcquireTurns> {
+    return tryAcquireTurns(this.directory, "agent.lock");
   }
 
   /** Allocate the next raw-output directory. */
@@ -140,10 +136,5 @@ export class AgentStore {
 
 /** List saved Agent identities, newest first. */
 export function listAgents(root = AGENTS_PATH): AgentData[] {
-  if (!existsSync(root)) return [];
-
-  return readdirSync(root)
-    .filter((id) => existsSync(join(root, id, "agent.json")))
-    .map((id) => JSON.parse(readFileSync(join(root, id, "agent.json"), "utf8")) as AgentData)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return listArtifacts<AgentData>(root, METADATA_FILE);
 }

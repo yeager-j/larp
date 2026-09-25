@@ -10,7 +10,7 @@ export function lastMessagePath(req: Pick<TurnRequest, "turnDir" | "schema">): s
 }
 /** Build first/resumed exec arguments; cwd belongs to spawn, never -C. */
 export function buildCodexArgs(req: TurnRequest): string[] {
-  const prompt = req.first ? `${req.rolePrompt}\n\n${req.prompt}` : req.prompt;
+  const prompt = req.sessionId ? req.prompt : `${req.rolePrompt}\n\n${req.prompt}`;
   return [
     "exec",
     ...(req.sessionId ? ["resume", req.sessionId] : []),

@@ -1,21 +1,25 @@
 import { randomUUID } from "node:crypto";
 
 import { TurnInterrupted } from "../harness/spawn.js";
-import type { Harness, TurnResult } from "../harness/types.js";
+import { attemptTurn } from "../harness/turn.js";
+import type { Harness } from "../harness/types.js";
 import { agentEnvelope, agentRolePrompt } from "./prompt.js";
 import type { AgentData, AgentEntry, AgentStore } from "./store.js";
 
-/** Outcome of one `deliver` call. */
+/** Outcome of one `deliver` call, with the replies this call committed before it ended. */
 export type Delivery =
   | { status: "replied"; replies: AgentEntry[] }
   | { status: "queued"; heldBy: number }
-  | { status: "failed"; replies: AgentEntry[]; error: string };
+  | { status: "failed"; replies: AgentEntry[]; error: string }
+  | { status: "interrupted"; replies: AgentEntry[] };
 
 /**
  * Deliver every waiting Caller message, one Turn at a time, until none remain.
  *
  * Returns `queued` when another live process holds the Agent lock; that process delivers the
- * waiting messages. A failed Turn leaves its messages waiting for the next delivery.
+ * waiting messages. A failed or interrupted Turn leaves its messages waiting for the next delivery.
+ *
+ * @throws When a harness process from an earlier Turn is still running.
  */
 export async function deliver(
   agent: AgentStore,
@@ -37,6 +41,10 @@ export async function deliver(
 
         replies.push(turn.reply);
       }
+    } catch (error) {
+      if (error instanceof TurnInterrupted) return { status: "interrupted", replies };
+
+      throw error;
     } finally {
       lock.release();
     }
@@ -52,58 +60,55 @@ async function runAgentTurn(
   waiting: AgentEntry[]
 ): Promise<{ reply: AgentEntry } | { error: string }> {
   const { participant, cwd } = agent.data;
-  const structured = Boolean(participant.schema);
   const sessionId = agent.sessionId();
-  let result: TurnResult;
+  const outcome = await attemptTurn(harnesses[participant.harness], () => ({
+    cwd,
+    model: participant.model,
+    effort: participant.effort,
+    extraArgs: participant.extraArgs,
+    permission: participant.permission,
+    web: participant.web ?? false,
+    rolePrompt: agentRolePrompt(participant.instructions),
+    prompt: agentEnvelope(waiting),
+    ...(participant.schema ? { schema: participant.schema } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    turnDir: agent.nextTurnDir(),
+    onEvent() {},
+  }));
 
-  try {
-    result = await harnesses[participant.harness].runTurn({
-      cwd,
-      model: participant.model,
-      effort: participant.effort,
-      extraArgs: participant.extraArgs,
-      permission: participant.permission,
-      web: participant.web ?? false,
-      rolePrompt: agentRolePrompt(participant.instructions),
-      prompt: agentEnvelope(waiting),
-      first: !sessionId,
-      ...(participant.schema ? { schema: participant.schema } : {}),
-      ...(sessionId ? { sessionId } : {}),
-      turnDir: agent.nextTurnDir(),
-      onEvent() {},
-    });
-  } catch (error) {
-    if (error instanceof TurnInterrupted) throw error;
-    result = { sessionId: sessionId ?? "", exitCode: 1, error: String(error) };
-  }
+  if (!outcome.ok) return recordFailure(agent, outcome.error);
 
-  const error = turnError(result, structured);
-  if (error) {
-    agent.append(entry({ from: "relay", kind: "failure", body: error }));
-    return { error };
-  }
+  const reply = replyFields(outcome.output, Boolean(participant.schema));
+  if ("error" in reply) return recordFailure(agent, reply.error);
 
-  const reply = entry({
+  const committed = entry({
     from: "agent",
     kind: "reply",
-    body: structured ? JSON.stringify(result.output, null, 2) : (result.output as string),
-    ...(structured ? { output: result.output } : {}),
-    completion: { sessionId: result.sessionId, delivered: waiting.map((item) => item.id) },
+    ...reply,
+    completion: { sessionId: outcome.sessionId, delivered: waiting.map((item) => item.id) },
   });
 
-  agent.append(reply);
+  agent.append(committed);
 
-  return { reply };
+  return { reply: committed };
 }
 
-function turnError(result: TurnResult, structured: boolean): string | undefined {
-  if (result.error) return result.error;
-  if (result.exitCode !== 0) return `Harness exited with code ${result.exitCode}.`;
-  if (!result.sessionId) return "Harness returned no session ID.";
-  if (result.output === undefined) return "Harness returned no reply.";
-  if (!structured && typeof result.output !== "string") return "Harness returned no reply text.";
+/** A structured reply is shown as formatted JSON; a free-text reply must be text. */
+function replyFields(
+  output: unknown,
+  structured: boolean
+): Pick<AgentEntry, "body" | "output"> | { error: string } {
+  if (output === undefined) return { error: "Harness returned no reply." };
+  if (structured) return { body: JSON.stringify(output, null, 2), output };
+  if (typeof output !== "string") return { error: "Harness returned no reply text." };
 
-  return undefined;
+  return { body: output };
+}
+
+function recordFailure(agent: AgentStore, error: string): { error: string } {
+  agent.append(entry({ from: "relay", kind: "failure", body: error }));
+
+  return { error };
 }
 
 function entry(fields: Omit<AgentEntry, "id" | "at">): AgentEntry {

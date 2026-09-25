@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -17,7 +17,6 @@ const req: TurnRequest = {
   web: false,
   rolePrompt: "protocol",
   prompt: "envelope",
-  first: true,
   schema: {},
   extraArgs: [],
   turnDir: "/turns/01",
@@ -29,10 +28,7 @@ test("Claude arguments preserve permissions and first/resumed session semantics"
   assert.ok(first.includes("--append-system-prompt"));
   assert.ok(first.includes("Bash,Edit,NotebookEdit,ExitPlanMode"));
   assert.ok(first.includes('{"disableAllHooks":true}'));
-  const resumed = buildClaudeArgs(
-    { ...req, sessionId: "uuid", first: false, permission: "write" },
-    "uuid"
-  );
+  const resumed = buildClaudeArgs({ ...req, sessionId: "uuid", permission: "write" }, "uuid");
   assert.ok(resumed.includes("--resume"));
   assert.ok(!resumed.includes("--session-id"));
   assert.ok(resumed.includes("--dangerously-skip-permissions"));
@@ -96,7 +92,6 @@ test("Codex prompt is positional on first and resumed Turns, with no -C", () => 
   const resumed = buildCodexArgs({
     ...req,
     sessionId: "thread",
-    first: false,
     permission: "write",
   });
   assert.deepEqual(resumed.slice(0, 3), ["exec", "resume", "thread"]);
@@ -204,7 +199,6 @@ fs.writeFileSync(args[args.indexOf('-o')+1],JSON.stringify({kind:'approve',body:
   assert.deepEqual(claude.output, { kind: "approve", body: "protocol\n\nenvelope" });
   const resumedClaude = await claudeHarness.runTurn({
     ...request,
-    first: false,
     sessionId: claude.sessionId,
   });
   assert.equal(resumedClaude.sessionId, claude.sessionId);
@@ -214,7 +208,6 @@ fs.writeFileSync(args[args.indexOf('-o')+1],JSON.stringify({kind:'approve',body:
   assert.deepEqual(codex.output, { kind: "approve", body: "protocol\n\nenvelope" });
   const resumedCodex = await codexHarness.runTurn({
     ...request,
-    first: false,
     sessionId: codex.sessionId,
   });
   assert.deepEqual(resumedCodex.output, { kind: "approve", body: "envelope" });
@@ -259,4 +252,26 @@ fs.writeFileSync(args[args.indexOf('-o')+1],'Codex text\\n');});`,
   const request = { ...free, cwd: dir, turnDir: dir };
   assert.equal((await claudeHarness.runTurn(request)).output, "Claude text 1");
   assert.equal((await codexHarness.runTurn(request)).output, "Codex text");
+});
+
+test("a harness process that cannot be recorded is stopped, and cleanup still completes", async (t) => {
+  const dir = tempDir(t);
+  const listeners = process.listenerCount("SIGINT");
+
+  // A directory where the record belongs makes both writing and removing it fail.
+  mkdirSync(join(dir, "harness.pid"));
+
+  const started = Date.now();
+  const result = await spawnTurn({
+    command: "sleep",
+    args: ["30"],
+    cwd: dir,
+    turnDir: dir,
+    onLine() {},
+  });
+
+  assert.match(result.error ?? "", /Could not record the harness process/);
+  assert.notEqual(result.exitCode, 0);
+  assert.ok(Date.now() - started < 10000, "the process was stopped");
+  assert.equal(process.listenerCount("SIGINT"), listeners);
 });

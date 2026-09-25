@@ -1,14 +1,21 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { Participant } from "./config.js";
-import { ROLES, type Entry, type Role } from "./message.js";
-import { appendLine, atomicWrite, nextTurnDir, readLines, tryAcquire } from "./store.js";
-import { ROUND_CAP } from "./workflow/plan.js";
+import type { Entry, Role } from "./message.js";
+import {
+  appendLine,
+  atomicWrite,
+  createArtifact,
+  listArtifacts,
+  logPath,
+  nextTurnDir,
+  openArtifact,
+  readLines,
+  tryAcquireTurns,
+} from "./store.js";
 
-/** Persisted identity and recoverable delivery cache for a Run. */
+/** Persisted identity of a Run. Sessions and delivery state are derived from its log. */
 export interface RunData {
   /** Unique Run identifier. */
   id: string;
@@ -18,120 +25,92 @@ export interface RunData {
   cwd: string;
   /** Run creation time in ISO 8601 format. */
   createdAt: string;
-  /** Absent on legacy Runs, whose review cap was three. */
+  /** Review rounds before the Phase Gate; absent on legacy Runs. */
   reviewRoundCap?: number;
   /** Fixed Role assignments for this Run. */
   participants: Record<Role, Participant>;
-  /** Resumable harness session identifiers by Role. */
-  sessions: Partial<Record<Role, string>>;
-  /** Entry identifiers already delivered to a Participant. */
-  delivered: string[];
 }
 /** Default Run storage, separate from the working repository. */
 export const RUNS_PATH = join(homedir(), ".larp/runs");
-/** Synchronous append-only Run log and atomic metadata updates. */
+const METADATA_FILE = "run.json";
+
+/** Synchronous append-only Run log with a process lock that excludes concurrent Relays. */
 export class RunStore {
   /** Absolute artifact directory. */
   readonly directory: string;
-  /** Current metadata, including saved Participants and working directory. */
+  /** Saved identity and Participants. */
   readonly data: RunData;
-  private constructor(directory: string, data: RunData) {
+
+  private constructor({ directory, data }: { directory: string; data: RunData }) {
     this.directory = directory;
     this.data = data;
   }
+
   /** Create a Run without writing to its working directory. */
   static create(
-    task: string,
-    participants: Record<Role, Participant>,
+    input: Pick<RunData, "task" | "participants"> & { reviewRoundCap: number },
     root = RUNS_PATH,
     cwd = process.cwd()
   ): RunStore {
-    const id = randomUUID();
-    const directory = join(root, id);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const run = new RunStore(directory, {
-      id,
-      task,
-      participants,
-      cwd: resolve(cwd),
-      createdAt: new Date().toISOString(),
-      reviewRoundCap: ROUND_CAP,
-      sessions: {},
-      delivered: [],
-    });
-    writeFileSync(join(directory, "messages.jsonl"), "", { mode: 0o600 });
-    run.save();
-    return run;
+    return new RunStore(createArtifact(root, METADATA_FILE, { ...input, cwd: resolve(cwd) }));
   }
-  /** Open a Run, repairing delivery metadata from committed replies. */
+
+  /** Open a saved Run by ID. */
   static open(id: string, root = RUNS_PATH): RunStore {
-    if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid Run ID.");
-    const directory = join(root, id);
-    const run = new RunStore(
-      directory,
-      JSON.parse(readFileSync(join(directory, "run.json"), "utf8"))
-    );
-    for (const entry of run.entries()) {
-      if (entry.completion && ROLES.includes(entry.from as Role)) {
-        run.data.sessions[entry.from as Role] = entry.completion.sessionId;
-        run.data.delivered = [...new Set([...run.data.delivered, ...entry.completion.delivered])];
-      }
-    }
-    return run;
+    return new RunStore(openArtifact<RunData>(root, id, METADATA_FILE, "Run"));
   }
-  /** Append a complete state-changing entry. */
+
+  /** Append a complete state-changing entry. Only the lock holder may append. */
   append(entry: Entry): void {
-    appendLine(join(this.directory, "messages.jsonl"), entry);
+    appendLine(logPath(this.directory), entry);
   }
-  /** Exclude concurrent Relays; recover a lock left by a dead process. */
+
+  /**
+   * Exclude concurrent Relays; recover a lock left by a dead process.
+   *
+   * @returns A function that releases the lock.
+   * @throws When another live Relay holds the Run, or a harness process from an earlier Turn is
+   *   still running.
+   */
   acquire(): () => void {
-    const lock = tryAcquire(join(this.directory, "relay.lock"));
+    const lock = tryAcquireTurns(this.directory, "relay.lock");
     if ("heldBy" in lock) throw new Error(`Run already active in process ${lock.heldBy}.`);
+
     return lock.release;
   }
+
   /** Read entries in durable order; ignore a torn final line after a crash. */
   entries(): Entry[] {
-    return readLines<Entry>(join(this.directory, "messages.jsonl"));
+    return readLines<Entry>(logPath(this.directory));
   }
-  /** Persist a harness session for a Role. */
-  setSession(role: Role, id: string): void {
-    this.data.sessions[role] = id;
-    this.save();
-  }
-  /** Persist the IDs acknowledged by a successful Turn. */
-  markDelivered(ids: string[]): void {
-    this.data.delivered = [...new Set([...this.data.delivered, ...ids])];
-    this.save();
-  }
+
   /** Absolute Plan artifact path. */
   get planPath(): string {
     return join(this.directory, "plan.md");
   }
+
   /** Absolute approved handoff document path, separate from the editable Plan. */
   get handoffPath(): string {
     return join(this.directory, "handoff.md");
   }
+
   /** Save a complete approved snapshot before opening the desktop composer. */
   writeHandoff(text: string): void {
     atomicWrite(this.handoffPath, text);
   }
+
   /** Replace the Plan before appending its request entry. */
   writePlan(text: string): void {
     atomicWrite(this.planPath, text);
   }
+
   /** Allocate the next attempt directory, including after a crash. */
   nextTurnDir(): string {
     return nextTurnDir(this.directory);
   }
-  private save(): void {
-    atomicWrite(join(this.directory, "run.json"), JSON.stringify(this.data, null, 2) + "\n");
-  }
 }
+
 /** List saved Run identities without starting any harness. */
 export function listRuns(root = RUNS_PATH): RunData[] {
-  if (!existsSync(root)) return [];
-  return readdirSync(root)
-    .filter((id) => existsSync(join(root, id, "run.json")))
-    .map((id) => JSON.parse(readFileSync(join(root, id, "run.json"), "utf8")) as RunData)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return listArtifacts<RunData>(root, METADATA_FILE);
 }

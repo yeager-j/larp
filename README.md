@@ -60,7 +60,9 @@ Planner and Reviewer use the design's read-only permission profiles. Implementat
 
 Runs live in `~/.larp/runs/<run-id>/`: metadata, append-only messages, `plan.md`, `handoff.md` after approval, and raw output for each Turn. Resume uses the original working directory and saved Participants. It restores the plan from the approved snapshot, or the latest Planner request before approval. You can edit the plan at a Gate before approving it in the same process. Interrupting a Turn leaves it pending for resume.
 
-Completed replies also record acknowledged Message IDs and the harness session ID in the log. This repairs a stale `run.json` after a crash. An incomplete trailing log line is discarded before the next append. A per-Run process lock prevents concurrent Relays.
+Completed replies record acknowledged Message IDs and the harness session ID in the log, and the Relay reads both from the log alone; `run.json` holds only the Run's identity, task, Participants, and review limit. An incomplete trailing log line is discarded before the next append. A per-Run process lock prevents concurrent Relays.
+
+Each running Turn records its harness process ID in its `turns/NN/` directory. If larp is killed or crashes during a Turn, the harness process can keep running. Until it exits, `larp plan resume`, `larp agent message`, and `larp discuss resume` refuse to start another Turn and name the process.
 
 Model replies never choose their recipient. Planner replies use `plan: null` for feedback or questions and a nonempty string for requests; this keeps the schema compatible with strict structured output. Implementation questions are handled in the separate Codex task.
 

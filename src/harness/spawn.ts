@@ -3,6 +3,8 @@ import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
+import { clearTurnProcess, recordTurnProcess } from "../store.js";
+
 /** Set on every harness process so larp commands inside a Turn can refuse to start Turns. */
 export const TURN_ENV = "LARP_TURN";
 /** Signals stop the Relay without committing the interrupted Turn. */
@@ -45,6 +47,15 @@ export async function spawnTurn(input: {
   child.on("error", (caught) => {
     error = caught.message;
   });
+  if (child.pid !== undefined) {
+    try {
+      recordTurnProcess(input.turnDir, child.pid);
+    } catch (caught) {
+      // Without the record, a crash could leave this process running unseen, so it must not run.
+      error = `Could not record the harness process: ${String(caught)}`;
+      child.kill("SIGTERM");
+    }
+  }
   let interrupted: NodeJS.Signals | undefined;
   const forwardSignal = (signal: NodeJS.Signals) => {
     interrupted = signal;
@@ -68,6 +79,12 @@ export async function spawnTurn(input: {
     closeSync(stderrFile);
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", terminate);
+
+    try {
+      clearTurnProcess(input.turnDir);
+    } catch {
+      // A record left behind names an exited process, which the next Turn lock removes.
+    }
   }
 }
 /** Decode a JSON line, ignoring non-protocol stdout. */

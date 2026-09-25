@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 
 import type { Participant } from "../config.js";
 import { TurnInterrupted } from "../harness/spawn.js";
-import type { Harness, HarnessEvent, TurnResult } from "../harness/types.js";
+import { attemptTurn, type TurnOutcome } from "../harness/turn.js";
+import type { Harness, HarnessEvent } from "../harness/types.js";
+import type { Unsaved } from "../store.js";
 import { discussEnvelope, discussRolePrompt } from "./prompt.js";
 import type { DiscussEntry, DiscussionData, DiscussionStore, Side } from "./store.js";
 import {
@@ -105,41 +107,33 @@ async function runTurn(
   for (let attempt = 1; attempt <= 2; attempt++) {
     ui.startTurn?.({ side: step.role, participant, round, mode: step.mode, retry: attempt > 1 });
 
-    let result: TurnResult;
-    try {
-      result = await harnesses[participant.harness].runTurn({
-        cwd: store.data.cwd,
-        model: participant.model,
-        effort: participant.effort,
-        extraArgs: participant.extraArgs,
-        permission: "read-only",
-        web: participant.web ?? false,
-        rolePrompt: discussRolePrompt(step.role, participant.instructions),
-        prompt: discussEnvelope({
-          data: store.data,
-          entries,
-          step,
-          first: !sessionId,
-          ...(retry ? { retry } : {}),
-        }),
+    const outcome = await attemptTurn(harnesses[participant.harness], () => ({
+      cwd: store.data.cwd,
+      model: participant.model,
+      effort: participant.effort,
+      extraArgs: participant.extraArgs,
+      permission: "read-only",
+      web: participant.web ?? false,
+      rolePrompt: discussRolePrompt(step.role, participant.instructions),
+      prompt: discussEnvelope({
+        data: store.data,
+        entries,
+        step,
         first: !sessionId,
-        schema: step.mode === "verdict" ? VERDICT_SCHEMA : PROPOSAL_SCHEMA,
-        ...(sessionId ? { sessionId } : {}),
-        turnDir: store.nextTurnDir(),
-        onEvent: (event) => ui.event?.(event),
-      });
-    } catch (error) {
-      if (error instanceof TurnInterrupted) throw error;
-      result = { sessionId: sessionId ?? "", exitCode: 1, error: String(error) };
+        ...(retry ? { retry } : {}),
+      }),
+      schema: step.mode === "verdict" ? VERDICT_SCHEMA : PROPOSAL_SCHEMA,
+      ...(sessionId ? { sessionId } : {}),
+      turnDir: store.nextTurnDir(),
+      onEvent: (event) => ui.event?.(event),
+    }));
+
+    if (!outcome.ok) {
+      commit(entry({ from: "relay", kind: "failure", role: step.role, body: outcome.error }));
+      throw new Error(`${step.role} Turn failed: ${outcome.error}`);
     }
 
-    const error = harnessError(result);
-    if (error) {
-      commit(entry({ from: "relay", kind: "failure", role: step.role, body: error }));
-      throw new Error(`${step.role} Turn failed: ${error}`);
-    }
-
-    const reply = replyEntry(step, result, entries);
+    const reply = replyEntry(step, outcome, entries);
     if (reply) {
       commit(reply);
       return;
@@ -154,22 +148,13 @@ async function runTurn(
   throw new Error(`${step.role} replied twice with an invalid reply.`);
 }
 
-function harnessError(result: TurnResult): string | undefined {
-  if (result.error) return result.error;
-  if (result.exitCode !== 0) return `Harness exited with code ${result.exitCode}.`;
-  if (!result.sessionId) return "Harness returned no session ID.";
-
-  return undefined;
-}
-
 /** Build the committed entry for a valid reply; the Relay sets the version. */
 function replyEntry(
   step: TurnStep,
-  result: TurnResult,
+  { output, sessionId }: Extract<TurnOutcome, { ok: true }>,
   entries: DiscussEntry[]
 ): DiscussEntry | undefined {
-  const { output } = result;
-  const completion = { sessionId: result.sessionId };
+  const completion = { sessionId };
   const proposals = entries.filter((entry) => entry.kind === "proposal");
 
   if (step.mode === "verdict")
@@ -190,7 +175,7 @@ function replyEntry(
       });
 }
 
-function entry(fields: Omit<DiscussEntry, "id" | "at">): DiscussEntry {
+function entry(fields: Unsaved<DiscussEntry>): DiscussEntry {
   return { id: randomUUID(), at: new Date().toISOString(), ...fields };
 }
 

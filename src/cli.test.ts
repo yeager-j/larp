@@ -10,6 +10,7 @@ import { ROLES } from "./message.js";
 import { builtInRole, writeRole } from "./roles.js";
 import { RunStore } from "./run-store.js";
 import { participants, tempDir } from "./test-support.js";
+import { ROUND_CAP } from "./workflow/plan.js";
 
 const cli = resolve("src/cli.ts");
 function invoke(home: string, args: string[], path = process.env.PATH, env: object = {}) {
@@ -76,7 +77,10 @@ test("CLI help, missing config, moved and invalid commands, plan list and show",
     invoke(home, ["agent", "start", "--planner", "claude:x"]).stderr,
     /Participant flags/
   );
-  const run = RunStore.create("cli task", participants, join(home, ".larp/runs"));
+  const run = RunStore.create(
+    { task: "cli task", participants, reviewRoundCap: ROUND_CAP },
+    join(home, ".larp/runs")
+  );
   assert.match(invoke(home, ["plan", "list"]).stdout, /cli task/);
   assert.equal(invoke(home, ["plan", "show", run.data.id]).stdout, "");
   assert.match(invoke(home, ["plan", "resume"]).stderr, /Usage/);

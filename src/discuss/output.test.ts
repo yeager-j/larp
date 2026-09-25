@@ -2,21 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Participant } from "../config.js";
+import type { Unsaved } from "../store.js";
 import { createDiscussOutput } from "./output.js";
 import type { DiscussEntry } from "./store.js";
 
 const author: Participant = { harness: "claude", model: "fable", effort: "high", extraArgs: [] };
 const critic: Participant = { harness: "codex", model: "astra", effort: "high", extraArgs: [] };
 
-function entry(fields: Partial<DiscussEntry>): DiscussEntry {
-  return {
-    id: "id",
-    at: "2026-09-24T00:00:00Z",
-    from: "author",
-    kind: "proposal",
-    body: "",
-    ...fields,
-  };
+function entry(fields: Unsaved<DiscussEntry>): DiscussEntry {
+  return { id: "id", at: "2026-09-24T00:00:00Z", ...fields };
 }
 
 test("Discussion output shows each Turn's progress and the entry it committed", () => {
@@ -32,7 +26,16 @@ test("Discussion output shows each Turn's progress and the entry it committed", 
   ui.event!({ type: "thinking" });
   ui.event!({ type: "tool", name: "Read", detail: '{"file_path":"/repo/src/lib.rs"}' });
   ui.event!({ type: "text", text: '{"proposal":"# Plan","body":"First draft"}' });
-  ui.entry!(entry({ proposal: "# Plan", body: "First draft", version: 1 }));
+  ui.entry!(
+    entry({
+      from: "author",
+      kind: "proposal",
+      proposal: "# Plan",
+      body: "First draft",
+      version: 1,
+      completion: { sessionId: "author" },
+    })
+  );
   ui.startTurn!({ side: "critic", participant: critic, round: 1, mode: "verdict", retry: false });
   ui.entry!(
     entry({
@@ -42,6 +45,7 @@ test("Discussion output shows each Turn's progress and the entry it committed", 
       version: 1,
       objection: "No cost data",
       body: "Add costs.",
+      completion: { sessionId: "critic" },
     })
   );
   ui.startTurn!({ side: "author", participant: author, round: 2, mode: "propose", retry: false });
@@ -57,6 +61,7 @@ test("Discussion output shows each Turn's progress and the entry it committed", 
       version: 2,
       objection: "Minor",
       body: "",
+      completion: { sessionId: "critic" },
     })
   );
 

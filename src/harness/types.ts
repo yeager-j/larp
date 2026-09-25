@@ -20,11 +20,9 @@ export interface TurnRequest {
   rolePrompt: string;
   /** Relay Envelope delivered to the Participant. */
   prompt: string;
-  /** Whether this Role has no existing harness session. */
-  first: boolean;
   /** Required structured reply format; omit for a free-text reply. */
   schema?: object;
-  /** Existing harness session to resume. */
+  /** Existing harness session to resume; absent for a new session, which also gets `rolePrompt`. */
   sessionId?: string;
   /** Configured arguments for the harness executable. */
   extraArgs: string[];

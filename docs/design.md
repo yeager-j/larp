@@ -65,7 +65,7 @@ Common to every Claude Turn: `--settings '{"disableAllHooks":true}' --effort <le
 
 ## Persistence
 
-`~/.larp/runs/<run-id>/` holds `run.json` (task, Participants, session IDs), `messages.jsonl` (append-only log, source of truth), `plan.md`, and per-Turn raw output. The log records every Message, every Human action (approve, abort, retry, notes), and every failure the Relay observed, so folding it through the reducer yields the current Phase. `larp resume <run-id>` continues from the log.
+`~/.larp/runs/<run-id>/` holds `run.json` (task, Participants, review limit), `messages.jsonl` (append-only log, source of truth), `plan.md`, and per-Turn raw output. The log records every Message, every Human action (approve, abort, retry, notes), and every failure the Relay observed, so folding it through the reducer yields the current Phase. `larp resume <run-id>` continues from the log.
 
 ## CLI
 

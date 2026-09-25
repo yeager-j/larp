@@ -22,13 +22,13 @@ import { DEFAULT_ROUNDS, MAX_ROUNDS } from "./discuss/workflow.js";
 import { openCodexHandoff } from "./handoff.js";
 import { claudeHarness } from "./harness/claude.js";
 import { codexHarness } from "./harness/codex.js";
-import { TURN_ENV, TurnInterrupted } from "./harness/spawn.js";
+import { TURN_ENV } from "./harness/spawn.js";
 import { ROLES, type Role } from "./message.js";
 import { runRelay } from "./relay.js";
 import { listRoles, loadRole, loadRoleSchema, type RoleDefinition } from "./roles.js";
 import { listRuns, RunStore } from "./run-store.js";
 import { configure, createUI, pickModel } from "./tui.js";
-import { initial, reduceWithCap } from "./workflow/plan.js";
+import { replay, ROUND_CAP } from "./workflow/plan.js";
 
 const help = `larp config
 larp plan "<task>" [--pick] [--planner harness:model] [--reviewer harness:model] [--quiet]
@@ -175,13 +175,16 @@ async function planCommand(operands: string[], values: Options): Promise<void> {
     else if (values.pick) overrides[role] = await pickModel(role, config.models, current);
   }
 
-  const run = RunStore.create(task, participantsFor(roles, overrides));
+  const run = RunStore.create({
+    task,
+    participants: participantsFor(roles, overrides),
+    reviewRoundCap: ROUND_CAP,
+  });
   await runPlan(run, values.quiet ?? false, config.verbose ?? false);
 }
 
 async function runPlan(run: RunStore, quiet: boolean, verbose: boolean): Promise<void> {
-  const cap = run.data.reviewRoundCap ?? 3;
-  const state = run.entries().reduce((state, item) => reduceWithCap(state, item, cap), initial());
+  const state = replay(run.entries(), run.data.reviewRoundCap);
 
   console.log(`Run ${run.data.id} · ${state.phase}`);
 
@@ -260,14 +263,7 @@ async function sendAndPrint(agent: AgentStore, body: string): Promise<void> {
     body,
   });
 
-  let delivery: Awaited<ReturnType<typeof deliver>>;
-  try {
-    delivery = await deliver(agent, harnesses);
-  } catch (error) {
-    if (error instanceof TurnInterrupted)
-      throw new Error(`Agent ${id} Turn interrupted; the message is still waiting. ${retry}`);
-    throw error;
-  }
+  const delivery = await deliver(agent, harnesses);
 
   if (delivery.status === "queued") {
     console.log(
@@ -287,6 +283,8 @@ async function sendAndPrint(agent: AgentStore, body: string): Promise<void> {
     throw new Error(
       `Agent ${id} Turn failed: ${delivery.error}\nThe message is still waiting. ${retry}`
     );
+  if (delivery.status === "interrupted")
+    throw new Error(`Agent ${id} Turn interrupted; the message is still waiting. ${retry}`);
 }
 
 async function discussCommand(operands: string[], values: Options): Promise<void> {

@@ -19,12 +19,25 @@ export const participants = Object.fromEntries(
     { harness: "claude", model: `${role}-model`, effort: "high", extraArgs: [] },
   ])
 ) as unknown as Record<Role, Participant>;
-/** Construct a log entry for reducer and store tests. */
+/**
+ * Construct a log entry for reducer and store tests.
+ *
+ * Any sender, Kind, and recipient combine, so tests can build entries the protocol never writes and
+ * check that the reducer ignores them.
+ */
 export function message(
   from: Entry["from"],
   kind: Entry["kind"],
   to: Entry["to"],
-  extra: Partial<Entry> = {}
+  extra: Record<string, unknown> = {}
 ): Entry {
-  return { id: "entry", at: "2026-09-22T00:00:00Z", from, kind, to, body: "message", ...extra };
+  return {
+    id: "entry",
+    at: "2026-09-22T00:00:00Z",
+    from,
+    kind,
+    to,
+    body: "message",
+    ...extra,
+  } as Entry;
 }
