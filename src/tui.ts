@@ -11,10 +11,18 @@ import {
   writeConfig,
   type Model,
 } from "./config.js";
-import { ROLES, type Role } from "./message.js";
+import type { Role } from "./message.js";
 import { createOutput } from "./output.js";
 import type { RelayUI } from "./relay.js";
-import { builtInRole, listRoles, ROLES_PATH, writeRole, type RoleDefinition } from "./roles.js";
+import {
+  BUILT_IN_ROLES,
+  builtInRole,
+  listRoles,
+  ROLES_PATH,
+  writeRole,
+  type BuiltInRoleName,
+  type RoleDefinition,
+} from "./roles.js";
 
 function requireTerminal(): void {
   if (!process.stdin.isTTY)
@@ -68,7 +76,7 @@ export async function pickModel(role: string, models: Model[], current?: Model):
 export async function configure(): Promise<void> {
   requireTerminal();
   const previous = existsSync(CONFIG_PATH) ? loadConfig() : undefined;
-  const legacy = previous ? legacyRoles(previous) : {};
+  const legacy: Partial<Record<string, RoleDefinition>> = previous ? legacyRoles(previous) : {};
   const files = new Map(listRoles().map((role) => [role.name, role]));
   const codex = readCodexModels();
 
@@ -83,10 +91,10 @@ export async function configure(): Promise<void> {
     ...(previous?.models ?? []),
     ...[...files.values()].map(({ harness, model }) => ({ harness, model })),
   ];
-  const names = [...new Set([...ROLES, ...files.keys()])];
+  const names = [...new Set([...Object.keys(BUILT_IN_ROLES), ...files.keys()])];
 
   for (const name of names) {
-    const current: RoleDefinition | undefined = files.get(name) ?? legacy[name as Role];
+    const current = files.get(name) ?? legacy[name];
     const picked = await pickModel(
       name,
       models,
@@ -98,7 +106,7 @@ export async function configure(): Promise<void> {
       files.has(name) && current?.harness === picked.harness && current.model === picked.model;
     if (unchanged) continue;
 
-    writeRole(current ? { ...current, ...picked } : builtInRole(name as Role, picked));
+    writeRole(current ? { ...current, ...picked } : builtInRole(name as BuiltInRoleName, picked));
   }
 
   writeConfig({

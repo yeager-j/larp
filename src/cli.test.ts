@@ -6,8 +6,7 @@ import test from "node:test";
 
 import { writeConfig, type Config } from "./config.js";
 import { DiscussionStore } from "./discuss/store.js";
-import { ROLES } from "./message.js";
-import { builtInRole, writeRole } from "./roles.js";
+import { BUILT_IN_ROLES, builtInRole, writeRole, type BuiltInRoleName } from "./roles.js";
 import { RunStore } from "./run-store.js";
 import { SwarmStore } from "./swarm/store.js";
 import { participants, tempDir } from "./test-support.js";
@@ -53,7 +52,7 @@ process.stdin.on('end', () => {
 function configureHome(home: string): void {
   const config: Config = { models: [participants.planner] };
   writeConfig(config, join(home, ".config/larp/config.json"));
-  for (const role of ROLES)
+  for (const role of Object.keys(BUILT_IN_ROLES) as BuiltInRoleName[])
     writeRole(
       builtInRole(role, { harness: "claude", model: `${role}-model` }),
       join(home, ".config/larp/roles")
@@ -341,6 +340,8 @@ process.stdin.on('end', () => {
     .map((line) => JSON.parse(line));
   assert.equal(requests.length, 5);
   assert.match(requests[0].prompt, /Intended execution Role/);
+  assert.equal(requests[0].args[requests[0].args.indexOf("--model") + 1], "swarm-planner-model");
+  assert.match(requests[0].prompt, /You plan read-only swarms/);
   for (const request of requests) {
     assert.equal(request.args[request.args.indexOf("--permission-mode") + 1], "plan");
     assert.equal(request.nested, "1");
@@ -366,6 +367,16 @@ test("CLI rejects misplaced swarm flags and invalid chunks before invoking a Har
     ["swarm", "start", "--chunks", chunks, "--role", "reviewer"],
   ])
     assert.equal(invoke(home, args, home).status, 1);
+  assert.equal(invoke(home, ["swarm", "list"], home).stdout, "");
+});
+
+test("swarm init requires its dedicated Role and never falls back to the plan planner", (t) => {
+  const home = tempDir(t);
+  configureHome(home);
+  rmSync(join(home, ".config/larp/roles/swarm-planner.md"));
+  const result = invoke(home, ["swarm", "init", "--message", "Split this repository"], home);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /No Role file .*swarm-planner\.md.*larp config/);
   assert.equal(invoke(home, ["swarm", "list"], home).stdout, "");
 });
 

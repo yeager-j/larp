@@ -60,7 +60,7 @@ larp agent start and message block until the reply is ready, then print it.
 larp discuss blocks until the Critic agrees (exit 0) or the round cap is reached (exit 2).
 Run them as background commands from a coding agent.
 Swarm commands block and display live chunk status on stderr (plain logs when redirected).
-init uses the planner Role; --role supplies context. start always creates a new execution.
+init uses the swarm-planner Role; --role supplies context. start always creates a new execution.
 Chunk paths are relative to start's working directory. Resume reads current repository files
 in the saved directory, uses saved inputs, and retries only unfinished chunks.
 --parallel defaults to 3. --out must not exist. Result files are generated and replaced on resume.
@@ -460,7 +460,7 @@ async function swarmCommand(operands: string[], values: Options): Promise<void> 
     const role = values.role === undefined ? undefined : loadRole(values.role);
     const store = SwarmStore.createDraft({
       task,
-      participant: participantFor(loadRole("planner")),
+      participant: participantFor(loadRole("swarm-planner")),
       ...(role
         ? {
             roleContext: {

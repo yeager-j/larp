@@ -118,7 +118,7 @@ test("draft uses Role context, validates output, preserves caller task and user 
       assert.equal(req.permission, "read-only");
       assert.ok(req.schema);
       assert.match(req.prompt, /Use local conventions/);
-      assert.match(req.rolePrompt, /split large areas/i);
+      assert.match(req.rolePrompt, /You split tasks/);
       return ok(document);
     })
   );

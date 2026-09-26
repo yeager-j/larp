@@ -18,7 +18,7 @@ larp config
 larp plan "Describe the change you want"
 ```
 
-`larp config` reads the local Codex model cache, shows its fetch time, and lets you select a model for each Role. Claude includes built-in choices and custom names. The command writes `~/.config/larp/config.json` and the Role files in `~/.config/larp/roles/`. The first run creates `planner.md` and `reviewer.md`, and moves the model, effort, and arguments from an older `config.json` into them.
+`larp config` reads the local Codex model cache, shows its fetch time, and lets you select a model for each Role. Claude includes built-in choices and custom names. The command writes `~/.config/larp/config.json` and the Role files in `~/.config/larp/roles/`. Setup creates any missing built-in Role files: `planner.md`, `reviewer.md`, and `swarm-planner.md`. It also moves legacy Planner/Reviewer model, effort, and arguments from an older `config.json` into their Role files. Running setup again adds newly introduced Roles while preserving your existing Role instructions and settings when you select a model.
 
 ## Roles
 
@@ -135,7 +135,7 @@ larp swarm list
 larp swarm show <swarm-id>
 ```
 
-Create the named Role in `~/.config/larp/roles/` first; `style-reviewer` is an example, not a built-in Role. `init` uses the configured `planner` Role and its own splitting instructions. The optional `--role` gives the splitter the intended review criteria as context. Its only stdout output is an absolute path to the editable chunk file:
+Create the named execution Role in `~/.config/larp/roles/` first; `style-reviewer` is an example, not a built-in Role. `init` uses the dedicated `swarm-planner` Role for its model, effort, Harness settings, and chunking guidance. Run `larp config` to create it on an existing installation, then edit `~/.config/larp/roles/swarm-planner.md` to customize its instructions. The workflow enforces read-only access and the chunk JSON format. The optional `--role` gives the splitter the intended execution criteria as context; it does not select the splitter. Its only stdout output is an absolute path to the editable chunk file:
 
 ```json
 {

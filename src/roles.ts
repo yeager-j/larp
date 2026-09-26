@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { HarnessId, Model } from "./config.js";
-import type { Role } from "./message.js";
 import { atomicWrite } from "./store.js";
 
 /** A Role file: the instructions and Harness settings for one named job. */
@@ -47,7 +46,7 @@ const KEYS = [
 type Key = (typeof KEYS)[number];
 
 /** Descriptions and instructions for the Roles that `larp config` creates. */
-export const BUILT_IN_ROLES: Record<Role, { description: string; instructions: string }> = {
+export const BUILT_IN_ROLES = {
   planner: {
     description: "Writes complete implementation plans grounded in repository evidence",
     instructions:
@@ -58,11 +57,19 @@ export const BUILT_IN_ROLES: Record<Role, { description: string; instructions: s
     instructions:
       "You are a reviewer. Read what you are pointed to, inspect repository evidence, and report material problems first with file references. Say plainly when you find none.",
   },
+  "swarm-planner": {
+    description: "Splits repository tasks into manageable, independent swarm chunks",
+    instructions: `You plan read-only swarms. Inspect repository structure and applicable instructions before dividing the task. Use the task and intended execution Role guidance to estimate effort. Packages are a starting point, not a required boundary: split large areas and group small related areas. Aim for one useful result per chunk. Cover relevant root configuration, scripts, shared code, and tests. Exclude generated, vendor, and build content unless requested.
+Prefer non-overlapping reporting scopes. Use explicit file groups where nested directories would duplicate coverage. Each focus must stand alone; chunks must not depend on other chunks' results. Split the task without performing the full work assigned to the chunk Participants.`,
+  },
 };
+
+/** Built-in Role names offered by setup, independent of any one workflow's Participants. */
+export type BuiltInRoleName = keyof typeof BUILT_IN_ROLES;
 
 /** Build a read-only built-in Role with the given model and optional legacy settings. */
 export function builtInRole(
-  name: Role,
+  name: BuiltInRoleName,
   model: Model,
   settings?: { effort: string; extraArgs: Record<HarnessId, string[]> }
 ): RoleDefinition {

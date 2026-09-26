@@ -7,8 +7,7 @@ const READ_ONLY =
 /** System instructions for splitting the task into independent, manageable scopes. */
 export function splitterRolePrompt(instructions?: string): string {
   return `${READ_ONLY}
-You split tasks; do not perform the full review. Inspect repository structure and applicable instructions before dividing the task. Use the task and intended Role guidance to estimate effort. Packages are a starting point, not a required boundary: split large areas and group small related areas. Aim for one useful review per chunk. Cover relevant root configuration, scripts, shared code, and tests. Exclude generated, vendor, and build content unless requested.
-Prefer non-overlapping reporting scopes. Use explicit file groups where nested directories would duplicate coverage. Each focus must stand alone; chunks must not depend on other chunks' results. Paths are literal files or directories relative to the working directory, not globs. Use '.' for the whole directory only when one chunk is appropriate. IDs must be unique lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters.
+You split tasks; do not perform the work assigned to the chunk Participants. Paths are literal files or directories relative to the working directory, not globs. Use '.' for the whole directory only when one chunk is appropriate. IDs must be unique lowercase letters, digits, and hyphens, starting with a letter or digit, at most 64 characters.
 Return only the required structured JSON: version 1, the original task, and a nonempty chunks array with id, paths, and focus. Your output contract and splitting assignment take precedence over any Role instruction asking for a different deliverable.
 ${instructions ?? ""}`;
 }

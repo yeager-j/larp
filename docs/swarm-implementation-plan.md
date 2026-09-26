@@ -23,7 +23,7 @@ larp swarm list
 larp swarm show <swarm-id>
 ```
 
-- `init` requires a nonempty `--message`. Its optional `--role` supplies the intended chunk Role's name, description, and instructions as context for splitting. The configured `planner` Role supplies the splitter's Harness, model, effort, web setting, and instructions. A workflow-owned system prompt explains manageable chunks and requires the chunk schema. No new built-in Role or model picker is needed.
+- `init` requires a nonempty `--message`. Its optional `--role` supplies the intended chunk Role's name, description, and instructions as context for splitting. The dedicated `swarm-planner` Role supplies the splitter's Harness, model, effort, web setting, and chunking guidance. The workflow owns the read-only rules and chunk schema. `larp config` creates this Role when missing, including for existing installations, using the existing model picker and preserving customized Role content. Built-in setup Roles remain separate from the plan workflow's Participant list.
 - `start` requires `--chunks` and `--role`. It can consume a hand-written file, so `init` is optional. It always creates a new execution identity; it never infers a draft identity from the file path. Reusing a chunk file deliberately starts a fresh execution.
 - `--parallel` defaults to 3 and accepts integers from 1 through 8 for v1. This bounds direct Harness processes, not any subagents a Harness creates internally. The upper bound keeps the first release's process and signal handling modest.
 - `--out` applies only to `start`. It is resolved against the command's working directory and must name a directory that does not yet exist. LARP creates it exclusively before starting any chunk. This prevents two swarms from sharing output files. Without it, use the execution's `results/` directory.
@@ -89,7 +89,7 @@ IDs match `[a-z0-9][a-z0-9-]{0,63}` and are unique. Paths are literal relative f
 
 `paths` defines the scope of findings, not a filesystem access boundary. A Participant may read related code and governing instructions outside its chunk for context. Findings belong to the assigned paths. Cross-boundary concerns should be tied to an in-scope location and identify the related dependency.
 
-The splitter's system prompt directs it to:
+The default `swarm-planner` Role guidance and workflow protocol direct the splitter to:
 
 1. Inspect repository structure and applicable instructions before dividing the task.
 2. Use the task and supplied Role guidance to estimate work. Packages are a starting point, not a required boundary.
@@ -177,6 +177,7 @@ Use a discriminated metadata union so draft-only planner data and execution-only
 | `src/swarm/store.ts` | Draft/execution identity, entries, locking, output ownership and artifact materialization. Reuse `src/store.ts` primitives. |
 | `src/swarm/prompt.ts` | Splitter system guidance, Role context, and self-contained chunk envelopes. |
 | `src/swarm/run.ts` | Driver integration, pure scheduling decisions, commits, recovery, and outcomes. Keep these together until size warrants a separate workflow file. |
+| `src/roles.ts`, `src/tui.ts` | Dedicated `swarm-planner` Role defaults and setup for fresh/existing installations, independent of plan Participants. |
 | `src/swarm/output.ts` | Pure frame formatting, live stderr redraw, plain-output fallback, elapsed timers, resize handling, and cleanup. |
 | `src/cli.ts` | Swarm command dispatch, valid flag combinations, Role resolution, limits, nesting guard, output and exit status. |
 | `package.json` and lockfile | Add `log-update` for the multiline status display and `string-width` for header sizing. |
@@ -197,7 +198,7 @@ No scheduler or Harness API change is expected. Keep refactoring of existing com
 
 ## Acceptance checks
 
-- `init --role style-reviewer` supplies that Role's guidance to the configured planner, requests structured chunks, and returns an editable file path.
+- `init --role style-reviewer` supplies that Role's guidance to the configured `swarm-planner`, requests structured chunks, and returns an editable file path. Missing splitter configuration points the user to `larp config`, without falling back to the plan's planner.
 - The original requested task remains authoritative in generated JSON; a user can subsequently edit the task as well as the chunks before `start`.
 - `start` accepts generated and hand-written files, rejects malformed input before a Harness launch, and uses the command's working directory for all chunk requests.
 - Editing the chunk file or Role files after startup does not change an execution or its resume.
@@ -228,4 +229,4 @@ Tests use fake Harnesses and temporary directories; they do not make paid model 
 
 V1 excludes source edits, worktrees, dependency graphs, per-chunk Roles, model-generated summaries, deduplication, follow-up messaging, selective reruns, repository snapshots, and automatic retry/backoff. The Caller can edit a copy of the chunk file and start a new execution for a different scope.
 
-The proposed defaults are: separate draft/execution IDs, planner-backed splitting, optional Role context at init, required Role at start, parallelism 3 with a maximum of 8, a new output directory per execution, one attempt per chunk per invocation, and fresh sessions on retries. These are explicit product choices for review, not unresolved implementation questions. Keep them consistent across help, tests, and the new ADR.
+The defaults are: separate draft/execution IDs, splitting through the dedicated `swarm-planner` Role, optional Role context at init, required Role at start, parallelism 3 with a maximum of 8, a new output directory per execution, one attempt per chunk per invocation, and fresh sessions on retries. Keep them consistent across help, tests, and the new ADR.
