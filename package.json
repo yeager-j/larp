@@ -14,6 +14,11 @@
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --import tsx src/*.test.ts src/**/*.test.ts",
+    "smoke:swarm": "bash scripts/swarm-smoke.sh",
+    "smoke:plan:claude": "bash scripts/smoke-plan.sh claude",
+    "smoke:plan:codex": "bash scripts/smoke-plan.sh codex",
+    "smoke:agent": "bash scripts/smoke-agent.sh",
+    "smoke": "bash scripts/smoke.sh",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx}\"",
     "prepare": "node .husky/install.mjs"

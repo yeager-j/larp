@@ -182,10 +182,25 @@ npm run format:check
 
 Prettier settings, import sorting, and the pre-commit hook follow `pdx-sdk`. No ESLint is configured. Tests use fixtures, temporary directories, and fake harnesses; they do not call models. Swarm rendering uses `log-update`; scheduling remains in the shared relay kernel.
 
-For an opt-in live smoke test with Haiku and then Codex as Reviewer:
+Live smoke tests can be run independently:
 
 ```sh
-LARP_LIVE_SMOKE=1 scripts/smoke.sh
+LARP_LIVE_SMOKE=1 npm run smoke:plan:claude
+LARP_LIVE_SMOKE=1 npm run smoke:plan:codex
+LARP_LIVE_SMOKE=1 npm run smoke:agent
+LARP_LIVE_SMOKE=1 npm run smoke:swarm
 ```
 
-This requires an existing configuration, Codex desktop, and a terminal for both approval Gates. It ends by starting and continuing a `reviewer` Agent, which checks a free-text reply from that Role's harness. Each test opens a desktop composer; neither submits the implementation prompt. Set `LARP_CODEX_MODEL` to override the smoke test's Codex model. While a Reviewer runs, try an `@planner` message. For recovery testing, interrupt a Turn and use the printed Run ID with `larp plan resume`.
+The planning tests use Haiku as Planner and either Haiku or Codex as Reviewer. They require existing LARP configuration, Harness authentication, Codex desktop, and a terminal for approval Gates. Each opens a desktop composer without submitting the implementation prompt. Set `LARP_CODEX_MODEL` to override the planning test's Codex Reviewer model. While a Reviewer runs, try an `@planner` message. For recovery testing, interrupt a Turn and use the printed Run ID with `larp plan resume`.
+
+The Agent test starts and continues the configured `reviewer` Role to check free-text replies and session continuity; it needs no desktop handoff. `LARP_LIVE_SMOKE=1 npm run smoke` (or `scripts/smoke.sh`) remains a combined shortcut for the two planning tests followed by the Agent test. It does not run the swarm test.
+
+For a live swarm smoke test that explains LARP's own source modules:
+
+```sh
+LARP_LIVE_SMOKE=1 npm run smoke:swarm
+```
+
+This uses real Codex agents with `gpt-6-luna` at `medium` effort for both the splitter and all chunk Participants. It requires an authenticated `codex` executable and model access. It uses fixed Participant settings through the swarm API, so it does not read or change your configured Roles. No desktop app or interactive input is required.
+
+The test inventories non-test TypeScript modules under `src/`, asks the splitter for 3–6 chunks, then runs up to three chunks at once. It checks that every module is assigned exactly once, each report names all its assigned modules, and resuming the completed execution starts no further agents. These checks validate workflow and report coverage; the explanations themselves can be reviewed in the saved Markdown reports. Drafts, execution state, raw Harness output, and reports stay under `~/.larp/swarms/`; their paths are printed. The regular `npm test` command still makes no model calls.
