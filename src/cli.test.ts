@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
@@ -9,6 +9,7 @@ import { DiscussionStore } from "./discuss/store.js";
 import { ROLES } from "./message.js";
 import { builtInRole, writeRole } from "./roles.js";
 import { RunStore } from "./run-store.js";
+import { SwarmStore } from "./swarm/store.js";
 import { participants, tempDir } from "./test-support.js";
 import { ROUND_CAP } from "./workflow/plan.js";
 
@@ -232,12 +233,140 @@ test("CLI commands that start Turns refuse to run inside a larp Turn", (t) => {
     ["plan", "resume", "id"],
     ["discuss", "--author", "claude:a", "--critic", "claude:b", "--message", "x"],
     ["discuss", "resume", "id"],
+    ["swarm", "init", "--message", "x"],
+    ["swarm", "start", "--role", "reviewer", "--chunks", "missing.json"],
+    ["swarm", "resume", "id"],
   ]) {
     const result = invoke(home, args, process.env.PATH, env);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /inside a larp Turn/);
   }
   assert.equal(invoke(home, ["agent", "roles"], process.env.PATH, env).status, 0);
+});
+
+test("CLI swarm init/edit/start/resume uses saved inputs and produces reports with clean stdout", (t) => {
+  const home = tempDir(t);
+  configureHome(home);
+  const bin = join(home, "bin");
+  mkdirSync(bin);
+  const trace = join(home, "trace.jsonl");
+  const fail = join(home, "fail-once");
+  writeFileSync(fail, "");
+  writeFileSync(
+    join(bin, "claude"),
+    `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+let prompt = '';
+process.stdin.on('data', c => prompt += c);
+process.stdin.on('end', () => {
+  fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({args, prompt, cwd:process.cwd(), nested:process.env.LARP_TURN}) + '\\n');
+  console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'HIDDEN PROGRESS'}]}}));
+  if (args.includes('--json-schema')) {
+    console.log(JSON.stringify({type:'result',structured_output:{version:1,task:'model task',chunks:[{id:'original',paths:['src/'],focus:'Review'}]}}));
+    return;
+  }
+  const chunk = JSON.parse(prompt.split('Chunk:\\n')[1].split('\\n\\nReturn')[0]);
+  if(chunk.id === 'b' && fs.existsSync(${JSON.stringify(fail)})) {
+    fs.unlinkSync(${JSON.stringify(fail)});
+    console.error('temporary failure'); process.exitCode = 1; return;
+  }
+  console.log(JSON.stringify({type:'result',result:'# Report ' + chunk.id}));
+});`,
+    { mode: 0o755 }
+  );
+  const path = `${bin}:${process.env.PATH}`;
+  const init = invoke(
+    home,
+    ["swarm", "init", "--message", "Original task", "--role", "reviewer"],
+    path
+  );
+  assert.equal(init.status, 0, init.stderr);
+  const chunksPath = init.stdout.trim();
+  assert.match(chunksPath, /chunks.json$/);
+  assert.equal(JSON.parse(readFileSync(chunksPath, "utf8")).task, "Original task");
+  writeFileSync(
+    chunksPath,
+    JSON.stringify({
+      version: 1,
+      task: "Edited task",
+      chunks: ["a", "b", "c"].map((id) => ({ id, paths: [id], focus: "Edited focus" })),
+    })
+  );
+  const reviewerPath = join(home, ".config/larp/roles/reviewer.md");
+  writeFileSync(
+    reviewerPath,
+    readFileSync(reviewerPath, "utf8")
+      .replace("permission: read-only", "permission: write")
+      .replace("web: true", "web: true\nschema: missing.json")
+  );
+  const out = join(home, "results");
+  const start = invoke(
+    home,
+    [
+      "swarm",
+      "start",
+      "--chunks",
+      chunksPath,
+      "--role",
+      "reviewer",
+      "--out",
+      out,
+      "--parallel",
+      "2",
+    ],
+    path
+  );
+  assert.equal(start.status, 1, start.stderr);
+  assert.match(start.stdout, /2 succeeded, 1 failed/);
+  assert.doesNotMatch(start.stdout, /HIDDEN PROGRESS|\[start\]/);
+  assert.match(start.stderr, /\[start\] a/);
+  assert.doesNotMatch(start.stderr, /\x1b/);
+  const id = /Swarm ([\w-]+):/.exec(start.stdout)![1]!;
+  assert.notEqual(id, /swarm ([\w-]+)/.exec(init.stderr)![1]);
+  const store = SwarmStore.open(id, join(home, ".larp/swarms"));
+  assert.equal(store.data.kind === "execution" && store.data.document.task, "Edited task");
+  rmSync(chunksPath);
+  rmSync(reviewerPath);
+  const resume = invoke(home, ["swarm", "resume", id], path);
+  assert.equal(resume.status, 0, resume.stderr);
+  assert.match(resume.stdout, /3 succeeded, 0 failed/);
+  assert.deepEqual(
+    readdirSync(out).filter((file) => file.endsWith(".md")),
+    ["a.md", "b.md", "c.md"]
+  );
+  const requests = readFileSync(trace, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(requests.length, 5);
+  assert.match(requests[0].prompt, /Intended execution Role/);
+  for (const request of requests) {
+    assert.equal(request.args[request.args.indexOf("--permission-mode") + 1], "plan");
+    assert.equal(request.nested, "1");
+    assert.ok(!request.args.includes("--resume"));
+  }
+  const again = invoke(home, ["swarm", "resume", id], path);
+  assert.equal(again.status, 0, again.stderr);
+  assert.equal(readFileSync(trace, "utf8").trim().split("\n").length, 5);
+  assert.match(invoke(home, ["swarm", "list"], path).stdout, /3\/3 complete/);
+  assert.match(invoke(home, ["swarm", "show", id], path).stdout, /temporary failure/);
+});
+
+test("CLI rejects misplaced swarm flags and invalid chunks before invoking a Harness", (t) => {
+  const home = tempDir(t);
+  configureHome(home);
+  const chunks = join(home, "chunks.json");
+  writeFileSync(chunks, JSON.stringify({ version: 1, task: "Sweep", chunks: [] }));
+  for (const args of [
+    ["swarm", "resume", "id", "--parallel", "2"],
+    ["swarm", "init", "--message", "x", "--chunks", chunks],
+    ["swarm", "start", "--chunks", chunks, "--role", "reviewer", "--message", "x"],
+    ["swarm", "start", "--chunks", chunks, "--role", "reviewer", "--parallel", "9"],
+    ["swarm", "start", "--chunks", chunks, "--role", "reviewer"],
+  ])
+    assert.equal(invoke(home, args, home).status, 1);
+  assert.equal(invoke(home, ["swarm", "list"], home).stdout, "");
 });
 
 test("CLI runs through the symlink used by global npm installs", (t) => {

@@ -16,7 +16,7 @@ status: accepted
 - **Parallel Turns across Participants.** The driver runs at most one Turn per key and up to `parallel` Turns in total. It performs an action or returns an outcome only when no Turn is in flight. A step that was decided while a Turn was in flight is decided again after that Turn commits. After an error, it starts no new Turn, lets the Turns in flight commit, and then throws the first error.
 - **Every Turn directory is checked.** Before a Turn, the lock refuses while any `turns/*/harness.pid` names a live process, because parallel Turns can leave more than one.
 
-No shipped command runs Turns in parallel yet: plan, discuss, and agent run one Turn at a time. This ADR replaces the "parallel Turns" exclusion in `docs/design.md` for the kernel only. CONTEXT.md changes its Turn and Relay definitions when a command first runs Turns in parallel.
+`larp swarm` now runs Chunk Turns in parallel (ADR 0008); plan, discuss, and agent still run one Turn at a time. The swarm uses this driver without another scheduler. This supersedes the historical "parallel Turns" exclusion in `docs/design.md`, and CONTEXT.md defines the per-Participant concurrency rule.
 
 ## Considered options
 

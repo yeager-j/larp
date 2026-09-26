@@ -4,6 +4,8 @@
 
 Vocabulary is in [CONTEXT.md](../CONTEXT.md). Decisions with trade-offs are in [docs/adr](./adr). This file is the compact list of what was decided, for whoever builds it.
 
+Read-only parallel Swarms and caller-selected report exports are described in [ADR 0008](./adr/0008-read-only-swarms.md); its decisions supersede the corresponding exclusions below.
+
 ## Shape
 
 - The `larp plan` process is the Relay. It holds the Run's Message queue, starts one Turn at a time, waits for the process to exit, reads its structured output, enqueues it, repeats. No daemon, no nesting, no polling.

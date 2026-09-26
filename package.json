@@ -32,7 +32,8 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@clack/prompts": "^1.8.1"
+    "@clack/prompts": "^1.8.1",
+    "log-update": "^8.0.0"
   },
   "lint-staged": {
     "**/*.{ts,tsx}": "prettier --write"

@@ -1,6 +1,6 @@
 # LARP (LLM Agent Relay Protocol)
 
-A relay that lets sessions on different coding harnesses (Claude Code, Codex) exchange messages and take turns on a shared task, without either harness knowing the other's API. LARP is not a harness: it moves Messages and starts Turns, nothing more. It runs Workflows, lets a harness session start a standalone Agent, and runs Discussions between two models.
+A relay that lets sessions on different coding harnesses (Claude Code, Codex) exchange messages and take turns on a shared task, without either harness knowing the other's API. LARP is not a harness: it moves Messages and starts Turns, nothing more. It runs Workflows, lets a harness session start a standalone Agent, runs Discussions between two models, and fans out read-only repository work with Swarms.
 
 ## Language
 
@@ -13,7 +13,7 @@ A named definition of a job, stored as a Role file in `~/.config/larp/roles/`: i
 _Avoid_: persona, profile
 
 **Participant**:
-One Role, or one model with default settings, bound to one Harness session for the life of a Run or a Discussion. The Planner in a given Run and the Critic in a given Discussion are Participants. For a single session started by a Caller, see Agent.
+One Role, or one model with default settings, assigned a part in a Workflow. The Planner in a given Run, the Critic in a Discussion, and each Chunk in a Swarm have Participants. Plans and Discussions continue their Participants' Harness sessions; a Swarm retry starts a fresh session for the same self-contained assignment. For a single session started by a Caller, see Agent.
 _Avoid_: worker, bot
 
 **Run**:
@@ -29,11 +29,11 @@ One Role started by a Caller with `larp agent start`, outside any Workflow. It o
 _Avoid_: subagent, session, Participant
 
 **Caller**:
-The person or Harness session that runs `larp agent` or `larp discuss`. It receives each Agent reply, or the Discussion result, on stdout. A Caller is never a Participant or an Agent: commands that start Turns refuse to run inside a Turn.
+The person or Harness session that runs `larp agent`, `larp discuss`, or `larp swarm`. It receives each Agent reply, Discussion result, or Swarm summary on stdout. A Caller is never a Participant or an Agent: commands that start Turns refuse to run inside a Turn.
 _Avoid_: parent, user
 
 **Turn**:
-One Participant or Agent working once: it starts when the Relay delivers a Message to it and ends when its Harness process exits. Exactly one Turn is active in a Run, a Discussion, or an Agent at a time. A Participant may use its Harness's own subagents inside a Turn; that is invisible to LARP.
+One Participant or Agent working once: it starts when the Relay delivers a Message to it and ends when its Harness process exits. Plans, Discussions, and standalone Agents run one Turn at a time. A Swarm runs several Chunk Turns concurrently, bounded by its parallel limit, with at most one active Turn per Chunk. A Participant may use its Harness's own subagents inside a Turn; that is invisible to LARP.
 _Avoid_: Step, invocation, call
 
 **Message**:
@@ -45,12 +45,18 @@ The category of a Message that the Workflow uses to decide what happens next. So
 _Avoid_: Type, intent, verb
 
 **Relay**:
-The LARP process that owns the Message queue for a Run, a Discussion, or an Agent, delivers the next Message by starting a Turn, and waits for that Turn to end before delivering another.
+The LARP process that owns a Workflow's log and delivers Messages by starting Turns under its scheduling rules. It waits for all in-flight Turns before releasing the workflow lock. Swarms may deliver to several independent Participants at once.
 _Avoid_: Daemon, orchestrator, harness, coordinator
 
 **Discussion**:
 Two Participants, the Author and the Critic, answering one Caller message until the Critic agrees with a Proposal or the round cap is reached. The Caller can reopen a finished Discussion with a follow-up, which goes to the Author first. A Discussion is not a Run: it has no Phases, Gates, or Human, and it is stored apart from Runs and Agents.
 _Avoid_: debate, conversation, Run
+
+**Swarm**:
+A read-only workflow that drafts independent Chunks or executes a reviewed Chunk document. A draft and each execution have separate identities under `~/.larp/swarms/`. One log owns progress for all Chunks in an execution. A Swarm Participant is not a standalone Agent.
+
+**Chunk**:
+One independent reporting scope: a unique ID, literal paths relative to the execution directory, and focus instructions. Paths scope the findings, not the files a Participant may read for context. Each successful Chunk produces one Markdown report.
 
 **Author**:
 The Participant in a Discussion that owns the Proposal. Every Author reply contains the full Proposal.

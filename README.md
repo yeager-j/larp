@@ -6,6 +6,8 @@ A local relay between Claude Code and Codex. A Planner writes a plan, a Reviewer
 
 A Claude Code or Codex session can also start a standalone Agent from a named Role, such as `larp agent start --role reviewer --message "Review my plan"`, without knowing which harness or model the Role uses. `larp discuss` lets two models discuss a question until they agree.
 
+`larp swarm` splits a repository task into editable chunks, then runs a read-only Participant for each chunk in parallel and saves Markdown reports.
+
 Requires Node.js 24 or later and authenticated `claude` and/or `codex` executables on PATH. Desktop handoff currently requires macOS with the Codex desktop app installed.
 
 ```sh
@@ -62,7 +64,7 @@ Runs live in `~/.larp/runs/<run-id>/`: metadata, append-only messages, `plan.md`
 
 Completed replies record acknowledged Message IDs and the harness session ID in the log, and the Relay reads both from the log alone; `run.json` holds only the Run's identity, task, Participants, and review limit. An incomplete trailing log line is discarded before the next append. A per-Run process lock prevents concurrent Relays.
 
-Each running Turn records its harness process ID in its `turns/NN/` directory. If larp is killed or crashes during a Turn, the harness process can keep running. Until it exits, `larp plan resume`, `larp agent message`, and `larp discuss resume` refuse to start another Turn and name the process.
+Each running Turn records its harness process ID in its `turns/NN/` directory. If larp is killed or crashes during a Turn, the harness process can keep running. Until it exits, `larp plan resume`, `larp agent message`, `larp discuss resume`, and `larp swarm resume` refuse to start another Turn and name the process.
 
 Model replies never choose their recipient. Planner replies use `plan: null` for feedback or questions and a nonempty string for requests; this keeps the schema compatible with strict structured output. Implementation questions are handled in the separate Codex task.
 
@@ -82,7 +84,7 @@ larp agent show <agent-id>
 
 `larp agent message` continues the same harness session. If the Agent is idle, it runs a Turn and prints the reply. If a Turn is running, it queues the message and exits at once; the running larp process delivers it in the next Turn and prints that reply too. When one process prints several replies, a `[larp] Reply to:` line before each one quotes the message it answers. Messages cannot be added to a Turn that is already running. When a Turn fails, its message stays queued and the next `larp agent message` sends it again.
 
-Every harness process that larp starts gets `LARP_TURN=1`. `larp plan`, `larp plan resume`, `larp agent start`, and `larp agent message` refuse to run when it is set, so an Agent or Participant cannot start more Agents. This depends on the harness shell passing the variable on; a Codex `shell_environment_policy` with `inherit = "none"` disables the guard.
+Every harness process that larp starts gets `LARP_TURN=1`. Commands that start Turns, including swarm init/start/resume, refuse to run when it is set, so an Agent or Participant cannot start more Agents. This depends on the harness shell passing the variable on; a Codex `shell_environment_policy` with `inherit = "none"` disables the guard.
 
 To teach a coding agent to use this, add something like the following to `CLAUDE.md` or `AGENTS.md`:
 
@@ -122,6 +124,52 @@ stderr shows a live transcript: a start line with the Discussion ID, then each T
 
 Every Turn is read-only, whatever the Role's `permission` says. Role `claude-args` and `codex-args` still pass through unchanged, as in `larp plan` and `larp agent`. Args that bypass the sandbox or stop session persistence (such as Codex `--ephemeral`) break that guarantee or `resume`.
 
+## Swarms
+
+```sh
+larp swarm init --message "Code style sweep of the whole repository" --role style-reviewer
+# Review and edit the printed chunks.json file.
+larp swarm start --chunks <path>/chunks.json --role style-reviewer --parallel 3
+larp swarm resume <swarm-id>
+larp swarm list
+larp swarm show <swarm-id>
+```
+
+Create the named Role in `~/.config/larp/roles/` first; `style-reviewer` is an example, not a built-in Role. `init` uses the configured `planner` Role and its own splitting instructions. The optional `--role` gives the splitter the intended review criteria as context. Its only stdout output is an absolute path to the editable chunk file:
+
+```json
+{
+  "version": 1,
+  "task": "Code style sweep of the whole repository",
+  "chunks": [
+    { "id": "harness", "paths": ["src/harness/"], "focus": "Review adapter and process code against repository style guidance." }
+  ]
+}
+```
+
+`start` also accepts a hand-written file. Run it from the directory the paths describe, usually the same directory as `init`. Paths are literal relative file/directory names, not globs; `.` means the whole directory. IDs use lowercase letters, digits, and hyphens and must be unique. Invalid input fails before a Harness starts. Paths define where findings belong; Participants may read related files for context. LARP validates path syntax but does not inspect repository contents or guarantee complete coverage.
+
+Each `init` creates a draft in `~/.larp/swarms/<id>/`. Each `start` creates a separate execution there, with immutable copies of the reviewed chunks, Role settings, working directory, and concurrency limit. It never changes the draft. The default output is `<execution-dir>/results/<chunk-id>.md`. Supply `--out <new-directory>` to export elsewhere, including within the repository. That directory must not already exist. It contains an ownership marker and generated reports; resume can replace edits to those reports. Resuming a draft preserves an existing editable chunk file and never executes its chunks.
+
+`--parallel` defaults to 3 and accepts 1 through 8 simultaneous direct Harness processes. In an interactive terminal, stderr shows a header, a progress count, and a row per chunk, updated in place:
+
+```text
+[larp] swarm abc123 · style-reviewer · 3 chunks · parallel 3
+[larp] Repository: /work/my-project
+[larp] Results: /home/me/.larp/swarms/abc123/results/
+[progress] 2m 10s elapsed · 1 running · 1 waiting · 1 complete · 0 failed
+
+• [harness] Running (2m 10s)
+• [config] Complete (53s)
+• [storage] Queued
+```
+
+Timers update once per second. Completed durations are frozen. Small terminals prioritize running/failed chunks and show an omitted-row count. Redirected stderr receives plain start/done/failure lines and a heartbeat after 30 seconds without a status change. stdout receives the final summary; reports and raw Harness output are saved to files. No terminal input is required, so a calling coding agent can run the command in the background.
+
+A failed chunk does not stop other chunks. `resume` retries only unfinished chunks, once per invocation, in fresh Harness sessions. Committed replies are not regenerated: if writing a report failed, resume recreates it from the log. An interrupt stops new scheduling and preserves completed results. Resume uses the saved directory but reads its current files; repository content is not snapshotted. `list` shows committed progress, and `show` includes saved inputs, outcomes, errors, and artifact paths.
+
+Exit 0 means a draft is ready, or all chunk replies were saved and exported. Exit 1 means validation, a chunk, an interrupt, or an infrastructure operation failed. Reports containing findings still count as successful results. Every Turn uses the existing read-only permission profile even when the Role specifies `write`. Workflow output contracts override a Role's standalone-Agent schema: chunking returns JSON and execution returns Markdown. As with plan/discuss, trusted custom Harness args must not bypass permissions or session recording. There is no automatic report synthesis or source editing.
+
 ## Development
 
 ```sh
@@ -132,7 +180,7 @@ npm run format
 npm run format:check
 ```
 
-Prettier settings, import sorting, and the pre-commit hook follow `pdx-sdk`. No ESLint is configured. Tests use fixtures, temporary directories, and fake harnesses; they do not call models.
+Prettier settings, import sorting, and the pre-commit hook follow `pdx-sdk`. No ESLint is configured. Tests use fixtures, temporary directories, and fake harnesses; they do not call models. Swarm rendering uses `log-update`; scheduling remains in the shared relay kernel.
 
 For an opt-in live smoke test with Haiku and then Codex as Reviewer:
 

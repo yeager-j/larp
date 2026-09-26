@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
 import { tempDir } from "../test-support.js";
 import { buildClaudeArgs, parseClaudeEvent } from "./claude.js";
 import { buildCodexArgs, parseCodexEvent, readCodexOutput } from "./codex.js";
-import { spawnTurn } from "./spawn.js";
+import { spawnTurn, TurnInterrupted } from "./spawn.js";
 import type { TurnRequest } from "./types.js";
 
 const req: TurnRequest = {
@@ -164,6 +164,62 @@ test("spawn failures return actionable errors", async (t) => {
   assert.notEqual(result.exitCode, 0);
   assert.match(result.error!, /ENOENT/);
 });
+
+test(
+  "interrupting parallel Harness children forwards the signal and removes listeners and process records",
+  { timeout: 5000 },
+  async (t) => {
+    const root = tempDir(t);
+    const before = {
+      SIGINT: process.listenerCount("SIGINT"),
+      SIGTERM: process.listenerCount("SIGTERM"),
+    };
+    let readyCount = 0;
+    let ready!: () => void;
+    const allReady = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    const dirs = ["a", "b", "c"].map((id) => join(root, id));
+    const outcomes = Promise.allSettled(
+      dirs.map((dir) =>
+        spawnTurn({
+          command: process.execPath,
+          args: [
+            "-e",
+            "process.on('SIGINT',()=>{console.log('stopped');process.exit(0)});console.log('ready');setInterval(()=>{},1000)",
+          ],
+          cwd: root,
+          turnDir: dir,
+          onLine(line) {
+            if (line === "ready" && ++readyCount === dirs.length) ready();
+          },
+        })
+      )
+    );
+    t.after(() => {
+      for (const dir of dirs) {
+        const path = join(dir, "harness.pid");
+        if (existsSync(path)) {
+          try {
+            process.kill(Number(readFileSync(path, "utf8")), "SIGKILL");
+          } catch {}
+        }
+      }
+    });
+    await allReady;
+    process.emit("SIGINT");
+    for (const outcome of await outcomes) {
+      assert.equal(outcome.status, "rejected");
+      assert.ok(outcome.status === "rejected" && outcome.reason instanceof TurnInterrupted);
+    }
+    for (const dir of dirs) {
+      assert.match(readFileSync(join(dir, "stdout.jsonl"), "utf8"), /stopped/);
+      assert.equal(existsSync(join(dir, "harness.pid")), false);
+    }
+    assert.equal(process.listenerCount("SIGINT"), before.SIGINT);
+    assert.equal(process.listenerCount("SIGTERM"), before.SIGTERM);
+  }
+);
 
 test("real adapter shells use final artifacts and session IDs across resume", async (t) => {
   const { mkdirSync } = await import("node:fs");
