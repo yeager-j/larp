@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout } from "node:timers/promises";
 
-import { appendRecord, readRecords, tryAcquireTurns } from "./store.js";
+import { appendLine, appendRecord, readRecords, tryAcquireTurns } from "./store.js";
 import { tempDir } from "./test-support.js";
 
 const store = resolve("src/store.ts");
@@ -30,7 +30,7 @@ test("concurrent processes never share the lock or lose appended records", async
   writeFileSync(lock, "999999999");
 
   const script = (n: number) => `
-    import { appendRecord, tryAcquire } from ${JSON.stringify(store)};
+    import { appendLine, appendRecord, tryAcquire } from ${JSON.stringify(store)};
     let held = 0;
     while (held < ${rounds}) {
       const lock = tryAcquire(${JSON.stringify(lock)});
@@ -167,3 +167,73 @@ function isRunning(pid: number): boolean {
 function killIfAlive(pid: number): void {
   if (isRunning(pid)) process.kill(pid, "SIGKILL");
 }
+
+test("atomic replacements from concurrent writers always complete", async (t) => {
+  const dir = tempDir(t);
+  const path = join(dir, "role.json");
+  const codes = await Promise.all(
+    Array.from({ length: 6 }, (_, n) =>
+      worker(`
+    import { atomicWrite } from ${JSON.stringify(store)};
+    for (let i = 0; i < 50; i++) atomicWrite(${JSON.stringify(path)}, JSON.stringify({writer: ${n}, body: "x".repeat(100000)}));
+  `)
+    )
+  );
+  assert.deepEqual(codes, Array(6).fill(0));
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).body.length, 100000);
+  assert.deepEqual(readdirSync(dir), ["role.json"]);
+});
+
+test("appendLine recovers a torn tail in a large log", (t) => {
+  const path = join(tempDir(t), "large.jsonl");
+  const prefix = '{"saved":true}\n'.repeat(1000000);
+  writeFileSync(path, prefix + "x".repeat(9000));
+  appendLine(path, { next: true });
+  assert.equal(readFileSync(path, "utf8"), prefix + '{"next":true}\n');
+  writeFileSync(path, "torn");
+  appendLine(path, { first: true });
+  assert.equal(readFileSync(path, "utf8"), '{"first":true}\n');
+});
+
+test("a Relay crash before recording the child cannot start an unrecorded harness", async (t) => {
+  const dir = tempDir(t);
+  const marker = join(dir, "started");
+  const code = await worker(`
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { spawnTurn } from ${JSON.stringify(resolve("src/harness/spawn.ts"))};
+    const original = fs.writeFileSync;
+    fs.writeFileSync = (path, ...args) => {
+      if (String(path).includes('harness.pid')) process.exit(88);
+      return original(path, ...args);
+    };
+    syncBuiltinESMExports();
+    await spawnTurn({ command: process.execPath,
+      args: ['-e', ${JSON.stringify(`require('fs').writeFileSync(${JSON.stringify(marker)}, 'started')`)}],
+      cwd: ${JSON.stringify(dir)}, turnDir: ${JSON.stringify(dir)}, onLine() {} });
+  `);
+  assert.equal(code, 88);
+  await setTimeout(100);
+  assert.equal(existsSync(marker), false);
+});
+
+test("appending to an intact large log reads only a bounded tail", async (t) => {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const path = join(tempDir(t), "large.jsonl");
+  writeFileSync(path, '{"saved":true}\n'.repeat(1000000));
+  const original = fs.readSync;
+  let bytes = 0;
+  t.mock.method(fs, "readSync", (...args: Parameters<typeof fs.readSync>) => {
+    const count = Reflect.apply(original, fs, args);
+    bytes += count;
+    return count;
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  appendLine(path, { next: true });
+  assert.ok(bytes <= 4096, `read ${bytes} bytes`);
+});

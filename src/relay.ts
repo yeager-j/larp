@@ -20,6 +20,7 @@ import type { RunStore } from "./run-store.js";
 import type { Unsaved } from "./store.js";
 import {
   activeRoles,
+  canApprovePlan,
   nextTurn,
   reduce,
   replay,
@@ -274,14 +275,14 @@ async function handleGate(
     displayedMessageId = last.id;
   }
 
-  const action = await ui.phaseGate(state, state.lastPlanEntryId ? run.planPath : undefined);
+  const action = await ui.phaseGate(state, canApprovePlan(state) ? run.planPath : undefined);
 
   if (action.kind === "feedback")
     run.append(entry({ from: "human", to: "planner", kind: "feedback", body: action.body }));
   else if (action.kind === "abort")
     run.append(entry({ from: "human", to: "run", kind: "abort", body: "" }));
-  else if (!state.lastPlanEntryId)
-    ui.log("A plan is required before approval. Message the Planner or abort.");
+  else if (!canApprovePlan(state))
+    ui.log("A reviewed plan is required before approval. Answer the Planner or abort.");
   else
     run.append(
       entry({ from: "human", to: "run", kind: "approve", body: "", plan: approvedPlan(run) })

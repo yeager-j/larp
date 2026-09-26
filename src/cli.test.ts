@@ -393,3 +393,58 @@ test("CLI runs through the symlink used by global npm installs", (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /larp config/);
 });
+
+test("swarm list does not count committed outcomes with failed exports", (t) => {
+  const home = tempDir(t);
+  const root = join(home, ".larp", "swarms");
+  const document = {
+    version: 1 as const,
+    task: "Review",
+    chunks: [{ id: "a", paths: ["src"], focus: "Review" }],
+  };
+  const draft = SwarmStore.createDraft(
+    { task: "Draft", participant: participants.planner },
+    root,
+    home
+  );
+  const split = {
+    id: "split",
+    at: "now",
+    key: "splitter",
+    durationMs: 1,
+    kind: "split" as const,
+    document,
+    sessionId: "s",
+  };
+  draft.append(split);
+  mkdirSync(draft.chunksPath);
+  assert.throws(() => draft.materialize(split));
+  const execution = SwarmStore.createExecution(
+    { document, participant: participants.reviewer, role: "reviewer", parallel: 1 },
+    root,
+    home
+  );
+  const reply = {
+    id: "reply",
+    at: "now",
+    key: "a",
+    durationMs: 1,
+    kind: "reply" as const,
+    body: "Report",
+    sessionId: "s",
+  };
+  execution.append(reply);
+  mkdirSync(join(execution.outputPath, "a.md"));
+  assert.throws(() => execution.materialize(reply));
+  const failed = invoke(home, ["swarm", "list"]);
+  assert.equal(failed.status, 0, failed.stderr);
+  assert.match(failed.stdout, /unfinished/);
+  assert.match(failed.stdout, /0\/1 complete/);
+  rmSync(draft.chunksPath, { recursive: true });
+  rmSync(join(execution.outputPath, "a.md"), { recursive: true });
+  draft.materialize(split);
+  execution.materialize(reply);
+  const restored = invoke(home, ["swarm", "list"]);
+  assert.match(restored.stdout, /ready/);
+  assert.match(restored.stdout, /1\/1 complete/);
+});

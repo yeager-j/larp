@@ -53,7 +53,7 @@ test("Planner questions and Gate feedback resume planning", () => {
 });
 test("interjections do not schedule Turns; failures return to the original phase", () => {
   const state = initial();
-  assert.equal(reduce(state, message("human", "feedback", "reviewer")), state);
+  assert.equal(nextTurn(reduce(state, message("human", "feedback", "reviewer"))), "planner");
   for (const phase of ["planning"] as const) {
     let current: PlanState = { ...state, phase };
     const failure = message("relay", "failure", "run", { role: "planner", reason: "schema" });
@@ -95,3 +95,35 @@ test("schemas match the fixed routing table and validate strict replies", () => 
   assert.ok(!validReply("planner", { kind: "feedback", body: "yes", plan: null }));
   assert.ok(!validReply("planner", { kind: "question", body: "why?", plan: "overwrite" }));
 });
+
+test("a Planner question after a saved plan cannot approve that plan", () => {
+  let state = [request, feedback, message("planner", "question", "human")].reduce(
+    reduce,
+    initial()
+  );
+  assert.equal(state.lastPlanEntryId, request.id);
+  assert.equal(state.gateReason, "question");
+  assert.equal(reduce(state, humanApproval), state);
+});
+
+for (const role of ["planner", "reviewer"] as const) {
+  test(`final review waits for an unread ${role} interjection`, () => {
+    const interjection = message("human", "feedback", role, { id: "interjection" });
+    let state = [request, interjection, approval].reduce(reduce, initial());
+    assert.equal(state.phase, "planning");
+    assert.equal(nextTurn(state), role);
+    assert.equal(reduce(state, humanApproval), state);
+    const response = message(
+      role,
+      role === "planner" ? "request" : "approve",
+      role === "planner" ? "reviewer" : "planner",
+      {
+        completion: { sessionId: "session", delivered: [interjection.id] },
+      }
+    );
+    state = reduce(state, response);
+    if (role === "planner") state = reduce(state, approval);
+    assert.equal(state.phase, "gate");
+    assert.equal(reduce(state, humanApproval).phase, "handoff");
+  });
+}

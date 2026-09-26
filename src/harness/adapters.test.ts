@@ -162,7 +162,7 @@ test("spawn failures return actionable errors", async (t) => {
     onLine() {},
   });
   assert.notEqual(result.exitCode, 0);
-  assert.match(result.error!, /ENOENT/);
+  assert.match(result.error!, /No such file|not found|ENOENT/);
 });
 
 test(
@@ -331,3 +331,70 @@ test("a harness process that cannot be recorded is stopped, and cleanup still co
   assert.ok(Date.now() - started < 10000, "the process was stopped");
   assert.equal(process.listenerCount("SIGINT"), listeners);
 });
+
+test(
+  "an ignored interrupt is escalated and its process record is removed",
+  { timeout: 4000 },
+  async (t) => {
+    const dir = tempDir(t);
+    await assert.rejects(
+      spawnTurn({
+        command: process.execPath,
+        args: ["-e", "process.on('SIGINT',()=>{}); console.log('ready'); setInterval(()=>{},1000)"],
+        cwd: dir,
+        turnDir: dir,
+        onLine(line) {
+          if (line === "ready") process.emit("SIGINT");
+        },
+      }),
+      TurnInterrupted
+    );
+    assert.equal(existsSync(join(dir, "harness.pid")), false);
+  }
+);
+
+test("a failed process record prevents the harness from starting", async (t) => {
+  const dir = tempDir(t);
+  mkdirSync(join(dir, "harness.pid"));
+  const result = await spawnTurn({
+    command: process.execPath,
+    args: ["-e", "require('fs').writeFileSync('started', 'yes')"],
+    cwd: dir,
+    turnDir: dir,
+    onLine() {},
+  });
+  assert.match(result.error!, /Could not record/);
+  assert.equal(existsSync(join(dir, "started")), false);
+});
+
+test(
+  "artifact write errors stop a resistant child through the normal result",
+  { timeout: 4000 },
+  async (t) => {
+    const fs = (await import("node:fs")).default;
+    const { syncBuiltinESMExports } = await import("node:module");
+    const original = fs.writeSync;
+    t.mock.method(fs, "writeSync", (...args: Parameters<typeof fs.writeSync>) => {
+      if (String(args[1]).includes("fail-output")) throw new Error("disk full");
+      return Reflect.apply(original, fs, args);
+    });
+    syncBuiltinESMExports();
+    t.after(() => {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+    const dir = tempDir(t);
+    const result = await spawnTurn({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.on('SIGTERM',()=>{}); console.log('fail-output'); setInterval(()=>{},1000)",
+      ],
+      cwd: dir,
+      turnDir: dir,
+      onLine() {},
+    });
+    assert.match(result.error!, /disk full/);
+    assert.equal(existsSync(join(dir, "harness.pid")), false);
+  }
+);

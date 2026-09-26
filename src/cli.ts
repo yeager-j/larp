@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -416,14 +416,21 @@ async function swarmCommand(operands: string[], values: Options): Promise<void> 
   if (command === "list") {
     if (rest.length) throw new Error("Usage: larp swarm list");
     for (const data of listSwarms()) {
-      const entries = SwarmStore.open(data.id).entries();
+      const store = SwarmStore.open(data.id);
+      const entries = store.entries();
+      const exported = entries.filter((entry) => {
+        if (entry.kind === "failure") return false;
+        const path =
+          entry.kind === "split" ? store.chunksPath : `${store.outputPath}/${entry.key}.md`;
+        return lstatSync(path, { throwIfNoEntry: false })?.isFile();
+      });
       const task = data.kind === "draft" ? data.task : data.document.task;
       const progress =
         data.kind === "draft"
-          ? entries.some((entry) => entry.kind === "split")
+          ? exported.some((entry) => entry.kind === "split")
             ? "ready"
             : "unfinished"
-          : `${executionProgress(data, entries).complete}/${data.document.chunks.length} complete`;
+          : `${executionProgress(data, exported).complete}/${data.document.chunks.length} complete`;
       console.log(
         terminalText(`${data.id}\t${data.kind}\t${data.createdAt}\t${progress}\t${task}`)
       );

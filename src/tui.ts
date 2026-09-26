@@ -23,6 +23,7 @@ import {
   type BuiltInRoleName,
   type RoleDefinition,
 } from "./roles.js";
+import { canApprovePlan } from "./workflow/plan.js";
 
 function requireTerminal(): void {
   if (!process.stdin.isTTY)
@@ -143,7 +144,7 @@ export function createUI({
         await clack.select({
           message: "Next action",
           options: [
-            ...(state.lastPlanEntryId
+            ...(canApprovePlan(state)
               ? [{ value: "approve" as const, label: "Approve and open in Codex" }]
               : []),
             { value: "feedback" as const, label: "Message the Planner" },

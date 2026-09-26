@@ -21,6 +21,7 @@
     "smoke": "bash scripts/smoke.sh",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx}\"",
+    "prepack": "npm run build",
     "prepare": "node .husky/install.mjs"
   },
   "engines": {

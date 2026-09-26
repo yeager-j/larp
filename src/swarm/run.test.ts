@@ -230,7 +230,7 @@ test("custom outputs are exclusive and refuse symlink exports and directory repl
       root
     );
   const store = create();
-  assert.throws(create, /EEXIST/);
+  assert.throws(create, /already exists|EEXIST/);
   const outside = join(root, "outside");
   writeFileSync(outside, "untouched");
   symlinkSync(outside, join(out, "a.md"));
@@ -485,3 +485,57 @@ for (const harness of ["claude", "codex"] as const) {
     }
   }
 }
+
+test("an interrupted empty staging reservation can finish starting a draft", (t) => {
+  const root = tempDir(t);
+  const draft = SwarmStore.createDraft(
+    { task: "Sweep", participant: participants.planner },
+    root,
+    root
+  );
+  writeFileSync(draft.chunksPath, JSON.stringify(document));
+  const staged = `${draft.outputPath}.${draft.data.id}.reservation`;
+  mkdirSync(staged);
+  const execution = SwarmStore.startExecution(
+    draft.chunksPath,
+    {
+      participant: participants.reviewer,
+      role: "reviewer",
+      parallel: 1,
+    },
+    root,
+    root
+  );
+  assert.equal(execution.data.kind, "execution");
+  assert.equal(
+    JSON.parse(readFileSync(join(execution.outputPath, ".larp-swarm.json"), "utf8")).id,
+    draft.data.id
+  );
+});
+
+test("a failed ownership write removes its reservation and permits retry", (t) => {
+  const root = tempDir(t);
+  const draft = SwarmStore.createDraft(
+    { task: "Sweep", participant: participants.planner },
+    root,
+    root
+  );
+  writeFileSync(draft.chunksPath, JSON.stringify(document));
+  const staged = `${draft.outputPath}.${draft.data.id}.reservation`;
+  mkdirSync(staged);
+  mkdirSync(join(staged, ".larp-swarm.json"));
+  const start = () =>
+    SwarmStore.startExecution(
+      draft.chunksPath,
+      {
+        participant: participants.reviewer,
+        role: "reviewer",
+        parallel: 1,
+      },
+      root,
+      root
+    );
+  assert.throws(start, /regular file/);
+  assert.equal(SwarmStore.open(draft.data.id, root).data.kind, "draft");
+  assert.equal(start().data.kind, "execution");
+});

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -228,11 +229,22 @@ export class SwarmStore {
   }
 
   private reserveOutput(): void {
-    mkdirSync(this.outputPath, { mode: 0o700 });
-    writeFileSync(join(this.outputPath, OWNER), JSON.stringify({ id: this.data.id }), {
-      mode: 0o600,
-      flag: "wx",
-    });
+    const staged = `${this.outputPath}.${this.data.id}.reservation`;
+    const existing = lstatSync(staged, { throwIfNoEntry: false });
+    if (existing && (!existing.isDirectory() || readdirSync(staged).some((name) => name !== OWNER)))
+      throw new Error(`Invalid output reservation: ${staged}`);
+    if (!existing) mkdirSync(staged, { mode: 0o700 });
+    try {
+      const owner = join(staged, OWNER);
+      regularFile(owner);
+      writeFileSync(owner, JSON.stringify({ id: this.data.id }), { mode: 0o600 });
+      if (lstatSync(this.outputPath, { throwIfNoEntry: false }))
+        throw new Error(`Output directory already exists: ${this.outputPath}`);
+      renameSync(staged, this.outputPath);
+    } catch (error) {
+      rmSync(staged, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   /** Rebuild exports from committed replies, while preserving an existing editable draft. */

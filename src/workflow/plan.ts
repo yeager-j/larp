@@ -14,6 +14,10 @@ export interface PlanState {
   failure?: { role: Role; attempts: number; reason: FailureEntry["reason"]; body: string };
   /** Entry containing the latest saved plan. */
   lastPlanEntryId?: string;
+  /** Why the Human gate opened; questions cannot approve an earlier plan. */
+  gateReason?: "question" | "review";
+  /** Human messages still waiting for their addressed Role to answer. */
+  unread?: { id: string; role: Role }[];
 }
 /** Maximum review rounds before human approval. */
 export const ROUND_CAP = 5;
@@ -99,6 +103,8 @@ export function reduceWithCap(state: PlanState, entry: Entry, roundCap: number):
       },
     };
   }
+  if (entry.from === "human" && entry.kind === "feedback" && state.phase === "planning")
+    return { ...state, unread: [...(state.unread ?? []), { id: entry.id, role: entry.to }] };
   if (state.phase === "failure") {
     if (
       entry.kind === "retry" &&
@@ -117,7 +123,7 @@ export function reduceWithCap(state: PlanState, entry: Entry, roundCap: number):
       entry.from === "human" &&
       entry.kind === "approve" &&
       entry.to === "run" &&
-      state.lastPlanEntryId
+      canApprovePlan(state)
     )
       return { ...state, phase: "handoff", pending: null };
     if (entry.from === "human" && entry.kind === "feedback" && entry.to === "planner")
@@ -136,23 +142,36 @@ export function reduceWithCap(state: PlanState, entry: Entry, roundCap: number):
     return state;
   const next = { ...state };
   delete next.failure;
+  if ("completion" in entry && next.unread)
+    next.unread = next.unread.filter(
+      (message) => message.role !== entry.from || !entry.completion.delivered.includes(message.id)
+    );
   if (entry.from === "planner" && entry.kind === "question")
-    return { ...next, phase: "gate", pending: null };
+    return { ...next, phase: "gate", pending: null, gateReason: "question" };
   if (state.phase === "planning") {
     if (entry.from === "planner" && entry.kind === "request")
       return { ...next, pending: "reviewer", lastPlanEntryId: entry.id };
     if (entry.from === "reviewer" && (entry.kind === "feedback" || entry.kind === "approve")) {
       const round = state.round + 1;
+      const unreadRole =
+        next.unread?.find((message) => message.role === "planner")?.role ?? next.unread?.[0]?.role;
+      const gate = !unreadRole && (entry.kind === "approve" || round >= roundCap);
       return {
         ...next,
+        gateReason: "review",
         round,
-        phase: entry.kind === "approve" || round >= roundCap ? "gate" : "planning",
-        pending: entry.kind === "approve" || round >= roundCap ? null : "planner",
+        phase: gate ? "gate" : "planning",
+        pending: gate ? null : (unreadRole ?? "planner"),
       };
     }
   }
   return state;
 }
+/** Whether the Human can approve a saved plan at the review gate. */
+export function canApprovePlan(state: PlanState): boolean {
+  return state.phase === "gate" && state.gateReason === "review" && Boolean(state.lastPlanEntryId);
+}
+
 /** Roles accepting interjections in the current phase. */
 export function activeRoles(state: PlanState): Role[] {
   if (state.phase === "planning") return ["planner", "reviewer"];

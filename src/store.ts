@@ -21,10 +21,24 @@ import { basename, join } from "node:path";
 
 /** Append one JSON line, first discarding a torn final line left by a crash. */
 export function appendLine(path: string, value: unknown): void {
-  const content = readFileSync(path);
-
-  if (content.length && content[content.length - 1] !== 10)
-    truncateSync(path, content.lastIndexOf(10) + 1);
+  const file = openSync(path, "r");
+  try {
+    let end = fstatSync(file).size;
+    const buffer = Buffer.alloc(4096);
+    while (end > 0) {
+      const start = Math.max(0, end - buffer.length);
+      const length = readSync(file, buffer, 0, end - start, start);
+      const newline = buffer.subarray(0, length).lastIndexOf(10);
+      if (newline >= 0) {
+        if (start + newline + 1 < fstatSync(file).size) truncateSync(path, start + newline + 1);
+        break;
+      }
+      end = start;
+      if (end === 0) truncateSync(path, 0);
+    }
+  } finally {
+    closeSync(file);
+  }
 
   appendFileSync(path, JSON.stringify(value) + "\n");
 }
@@ -89,8 +103,13 @@ export function readRecords<T>(path: string): T[] {
 
 /** Replace a file so readers never see a partial write. */
 export function atomicWrite(path: string, text: string): void {
-  writeFileSync(`${path}.tmp`, text, { mode: 0o600 });
-  renameSync(`${path}.tmp`, path);
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 /**
@@ -198,7 +217,7 @@ const TURN_PID_FILE = "harness.pid";
 
 /** Record the harness process of a running Turn, so a later Relay can see that it still runs. */
 export function recordTurnProcess(turnDir: string, pid: number): void {
-  writeFileSync(join(turnDir, TURN_PID_FILE), String(pid), { mode: 0o600 });
+  atomicWrite(join(turnDir, TURN_PID_FILE), String(pid));
 }
 
 /** Remove the record written by `recordTurnProcess` after the harness process exits. */
