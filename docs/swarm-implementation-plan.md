@@ -46,12 +46,12 @@ Use a fixed header and one live block on stderr. Update the progress line and ch
 [larp] Results: /home/me/.larp/swarms/abc123/results/
 [progress] 2m elapsed · 3 running · 2 waiting · 3 complete · 0 failed
 
-• [harness] Running (2m 10s)
-• [config] Complete (53s)
-• [storage] Queued
+⠋ [harness] Running (2m 10s)
+✓ [config] Complete (53s)
+○ [storage] Queued
 ```
 
-The rows above illustrate the format; the real display lists all chunks when they fit. Keep rows in manifest order so IDs do not jump as their status changes. States are Queued, Running, Complete, Failed, and Interrupted. Running durations update once per second, with immediate redraws on state changes. Completed/failed durations stop at the end of that attempt. The aggregate elapsed timer measures the current command invocation; on resume, already completed chunks retain their saved duration. A chunk is shown Complete only after its committed reply has been exported successfully; export errors are reported separately and do not cause another model call.
+The rows above illustrate the format; the real display lists all chunks when they fit. Keep rows in manifest order so IDs do not jump as their status changes. States are Queued, Running, Complete, Failed, and Interrupted. Agent IDs receive colors from a shuffled six-color palette, fixed for the invocation and reused after six agents. Running rows animate a cyan spinner every 80 milliseconds, with elapsed durations displayed in whole seconds and immediate redraws on state changes. Complete rows use green checkmarks, failures red crosses, queued rows gray circles, and interrupted rows yellow exclamation marks. `NO_COLOR` disables colors without disabling symbols or animation. Clip each row before applying colors so escape sequences stay intact. Completed/failed durations stop at the end of that attempt. The aggregate elapsed timer measures the current command invocation; on resume, already completed chunks retain their saved duration. A chunk is shown Complete only after its committed reply has been exported successfully; export errors are reported separately and do not cause another model call.
 
 Use [`log-update`](https://github.com/sindresorhus/log-update) to redraw the multiline block through `createLogUpdate(process.stderr)`. It provides multiline replacement, stderr support, and final-frame persistence. Keep Clack for existing prompts; its [spinner/task-log APIs](https://bomb.sh/docs/clack/packages/prompts/) serve loading indicators and grouped logs, while this display needs replacement of a complete status frame. Use `string-width` to account for wrapped header lines, including wide characters, when reserving space for the live block. Neither library schedules tasks.
 

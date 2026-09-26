@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { stripVTControlCharacters } from "node:util";
 
 import { participants } from "../test-support.js";
 import { createSwarmOutput, swarmFrame, terminalText, type SwarmRow } from "./output.js";
@@ -37,6 +38,8 @@ test("frames preserve order, update running timers and freeze finished durations
     { id: "c", status: "Queued" },
   ];
   const frame = swarmFrame(rows, 130000, 130000, 150, 24);
+  assert.match(frame, /✓ \[a\]/);
+  assert.match(frame, /○ \[c\]/);
   assert.match(frame, /1 running · 1 waiting · 1 complete · 0 failed/);
   assert.match(frame, /\[a\] Complete \(53s\)[\s\S]*\[b\] Running \(2m 10s\)[\s\S]*\[c\] Queued/);
   assert.match(swarmFrame(rows, 140000, 140000, 150, 24), /\[a\] Complete \(53s\)/);
@@ -54,6 +57,15 @@ test("small frames prioritize active and failed chunks and fit terminal dimensio
   assert.match(frame, /10 more chunks/);
   assert.ok(frame.split("\n").every((line) => line.length < 32));
   assert.equal(swarmFrame(rows, 0, 0, 20, 2).split("\n").length, 1);
+  const colored = swarmFrame(rows, 0, 0, 32, 7, true);
+  assert.equal(stripVTControlCharacters(colored), frame);
+  assert.match(colored, /\x1b\[31m✗\x1b\[39m/);
+  assert.match(colored, /\x1b\[36m⠋\x1b\[39m/);
+  for (const line of colored.split("\n")) {
+    const starts = line.match(/\x1b\[(?:31|36|96)m/g) ?? [];
+    const resets = line.match(/\x1b\[39m/g) ?? [];
+    assert.equal(starts.length, resets.length);
+  }
 });
 
 test("plain output emits an idle heartbeat, sanitizes errors, and stops after close", (t) => {
@@ -69,7 +81,7 @@ test("plain output emits an idle heartbeat, sanitizes errors, and stops after cl
   t.mock.timers.tick(29000);
   assert.doesNotMatch(output, /\[progress\]/);
   t.mock.timers.tick(1000);
-  assert.match(output, /30s elapsed · 1 running · 2 waiting/);
+  assert.match(stripVTControlCharacters(output), /30s elapsed · 1 running · 2 waiting/);
   ui.settled!({
     id: "f",
     at: "now",
@@ -78,7 +90,7 @@ test("plain output emits an idle heartbeat, sanitizes errors, and stops after cl
     body: "bad\x1b[2J\nerror",
     durationMs: 30000,
   });
-  assert.match(output, /bad error/);
+  assert.match(stripVTControlCharacters(output), /bad error/);
   assert.doesNotMatch(output, /\x1b/);
   ui.close!();
   const final = output;
@@ -96,16 +108,20 @@ test("live output redraws inline, restores saved durations, and cleans up on int
   const ui = createSwarmOutput({ stream, terminal: true });
   ui.begin!(data, [reply], "/reports");
   ui.start!("b");
-  t.mock.timers.tick(2000);
-  assert.match(output, /\[b\] Running \(2s\)/);
-  assert.match(output, /\[a\] Complete \(53s\)/);
+  assert.match(stripVTControlCharacters(output), /⠋ \[b\] Running/);
+  output = "";
+  t.mock.timers.tick(80);
+  assert.match(stripVTControlCharacters(output), /⠙ \[b\] Running/);
+  t.mock.timers.tick(1920);
+  assert.match(stripVTControlCharacters(output), /\[b\] Running \(2s\)/);
+  assert.match(stripVTControlCharacters(output), /\[a\] Complete \(53s\)/);
   assert.match(output, /\x1b\[/);
   assert.equal(stream.listenerCount("resize"), 1);
   stream.columns = 40;
   stream.emit("resize");
   stream.columns = 150;
   ui.close!();
-  assert.match(output, /\[b\] Interrupted \(2s\)/);
+  assert.match(stripVTControlCharacters(output), /\[b\] Interrupted \(2s\)/);
   assert.equal(stream.listenerCount("resize"), 0);
   const final = output;
   t.mock.timers.tick(10000);
@@ -136,7 +152,7 @@ test("an initial redraw failure still finalizes the display when the workflow cl
   const ui = createSwarmOutput({ stream, terminal: true });
   assert.throws(() => ui.begin!(data, [], "/reports"), /redraw failed/);
   ui.close!();
-  assert.match(output, /\[progress\]/);
+  assert.match(stripVTControlCharacters(output), /\[progress\]/);
   assert.equal(stream.listenerCount("resize"), 0);
   const final = output;
   t.mock.timers.tick(60000);
@@ -200,8 +216,71 @@ test("execution rows do not count a planner reply for a chunk named splitter", (
       ],
       "/reports"
     );
-    assert.match(output, /\[splitter\] Queued/);
-    assert.match(output, /0 complete/);
+    assert.match(stripVTControlCharacters(output), /\[splitter\] Queued/);
+    assert.match(stripVTControlCharacters(output), /0 complete/);
+  } finally {
+    ui.close!();
+  }
+});
+
+test("NO_COLOR keeps terminal animation and status symbols without color escapes", (t) => {
+  const previous = process.env.NO_COLOR;
+  process.env.NO_COLOR = "1";
+  t.after(() => {
+    if (previous === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = previous;
+  });
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
+  const stream = Object.assign(new PassThrough(), { columns: 150, rows: 24, isTTY: true });
+  let output = "";
+  stream.on("data", (chunk) => {
+    output += chunk;
+  });
+  const ui = createSwarmOutput({ stream, terminal: true });
+  try {
+    ui.begin!(data, [reply], "/reports");
+    ui.start!("b");
+    t.mock.timers.tick(80);
+    ui.settled!({ ...reply, kind: "failure", key: "b", body: "failed" });
+    assert.match(stripVTControlCharacters(output), /✓ \[a\] Complete/);
+    assert.match(stripVTControlCharacters(output), /⠙ \[b\] Running/);
+    assert.match(stripVTControlCharacters(output), /✗ \[b\] Failed/);
+    assert.doesNotMatch(output, /\x1b\[[0-9;]*m/);
+  } finally {
+    ui.close!();
+  }
+});
+
+test("agent label colors stay distinct and stable through animation, resizing and completion", (t) => {
+  const previous = process.env.NO_COLOR;
+  delete process.env.NO_COLOR;
+  t.after(() => {
+    if (previous !== undefined) process.env.NO_COLOR = previous;
+  });
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
+  const stream = Object.assign(new PassThrough(), { columns: 150, rows: 24, isTTY: true });
+  let output = "";
+  stream.on("data", (chunk) => {
+    output += chunk;
+  });
+  const ui = createSwarmOutput({ stream, terminal: true });
+  try {
+    ui.begin!(data, [], "/reports");
+    const labels = [...output.matchAll(/\x1b\[(9[1-6])m\[([abc])\]\x1b\[39m/g)];
+    assert.equal(labels.length, 3);
+    assert.equal(new Set(labels.map((match) => match[1])).size, 3);
+    const assigned = new Map(labels.map((match) => [match[2], match[1]]));
+    output = "";
+    ui.start!("a");
+    t.mock.timers.tick(80);
+    stream.columns = 32;
+    stream.emit("resize");
+    stream.columns = 150;
+    ui.settled!(reply);
+    const later = [...output.matchAll(/\x1b\[(9[1-6])m\[([abc])\]\x1b\[39m/g)];
+    assert.ok(later.length > 3);
+    for (const match of later) assert.equal(match[1], assigned.get(match[2]));
+    assert.match(output, /\x1b\[32m✓\x1b\[39m/);
   } finally {
     ui.close!();
   }

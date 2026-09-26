@@ -159,12 +159,12 @@ Each `init` creates a draft in `~/.larp/swarms/<id>/`. Starting its generated `c
 [larp] Results: /home/me/.larp/swarms/abc123/results/
 [progress] 2m 10s elapsed · 1 running · 1 waiting · 1 complete · 0 failed
 
-• [harness] Running (2m 10s)
-• [config] Complete (53s)
-• [storage] Queued
+⠋ [harness] Running (2m 10s)
+✓ [config] Complete (53s)
+○ [storage] Queued
 ```
 
-Timers update once per second. Completed durations are frozen. Small terminals prioritize running/failed chunks and show an omitted-row count. Redirected stderr receives plain start/done/failure lines and a heartbeat after 30 seconds without a status change. stdout receives the final summary; reports and raw Harness output are saved to files. No terminal input is required, so a calling coding agent can run the command in the background.
+Agent IDs receive randomly assigned colors that stay fixed during the command. The palette cycles after six agents. Running rows show cyan spinners; successful rows show green checkmarks, failures show red crosses, queued rows show gray circles, and interrupted rows show yellow exclamation marks. Set `NO_COLOR` to disable colors while keeping symbols and animation. Spinners update every 80 milliseconds; elapsed times show whole seconds. Completed durations are frozen. Small terminals prioritize running/failed chunks and show an omitted-row count. Redirected stderr receives plain start/done/failure lines and a heartbeat after 30 seconds without a status change. stdout receives the final summary; reports and raw Harness output are saved to files. No terminal input is required, so a calling coding agent can run the command in the background.
 
 A failed chunk does not stop other chunks. `resume` retries only unfinished chunks, once per invocation, in fresh Harness sessions. Committed replies are not regenerated: if writing a report failed, resume recreates it from the log. An interrupt stops new scheduling and preserves completed results. Resume uses the saved directory but reads its current files; repository content is not snapshotted. `list` shows committed progress, and `show` includes saved inputs, outcomes, errors, and artifact paths.
 

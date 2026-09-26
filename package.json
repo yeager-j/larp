@@ -39,6 +39,7 @@
   "dependencies": {
     "@clack/prompts": "^1.8.1",
     "log-update": "^8.0.0",
+    "picocolors": "^1.1.1",
     "string-width": "^8.3.0"
   },
   "lint-staged": {

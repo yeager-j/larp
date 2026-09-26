@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { createLogUpdate } from "log-update";
+import pc from "picocolors";
 import stringWidth from "string-width";
 
 import type { SwarmUI } from "./run.js";
@@ -9,6 +10,8 @@ import type { SwarmData, SwarmEntry } from "./store.js";
 export interface SwarmRow {
   /** Stable chunk ID or splitter label. */
   id: string;
+  /** Agent label color, assigned once per renderer invocation. */
+  color?: (typeof AGENT_COLORS)[number];
   /** Current visible state. */
   status: "Queued" | "Running" | "Complete" | "Failed" | "Interrupted";
   /** Wall-clock start of the current attempt, in milliseconds. */
@@ -16,6 +19,25 @@ export interface SwarmRow {
   /** Frozen duration of a settled attempt, in milliseconds. */
   durationMs?: number;
 }
+
+const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+const FRAME_INTERVAL_MS = 80;
+const STATUS_SYMBOL = { Queued: "○", Complete: "✓", Failed: "✗", Interrupted: "!" };
+const AGENT_COLORS = [
+  "cyanBright",
+  "magentaBright",
+  "blueBright",
+  "yellowBright",
+  "greenBright",
+  "redBright",
+] as const;
+const STATUS_COLOR = {
+  Queued: "gray",
+  Running: "cyan",
+  Complete: "green",
+  Failed: "red",
+  Interrupted: "yellow",
+} as const;
 
 /** Remove terminal escape sequences and flatten control characters for display. */
 export function terminalText(value: string): string {
@@ -35,21 +57,27 @@ function progress(rows: SwarmRow[], elapsedMs: number): string {
 
 function rowText(row: SwarmRow, now: number): string {
   const elapsed = row.status === "Running" ? now - row.startedAt! : row.durationMs;
-  return `• [${row.id}] ${row.status}${elapsed === undefined ? "" : ` (${duration(elapsed)})`}`;
+  const symbol =
+    row.status === "Running"
+      ? SPINNER[Math.floor(Math.max(0, elapsed!) / FRAME_INTERVAL_MS) % SPINNER.length]
+      : STATUS_SYMBOL[row.status];
+  return `${symbol} [${terminalText(row.id)}] ${row.status}${elapsed === undefined ? "" : ` (${duration(elapsed)})`}`;
 }
 
-/** Render a bounded live frame; rows retain manifest order even when some must be hidden. */
+/** Render a bounded live frame, optionally coloring states; clipping precedes ANSI styling. */
 export function swarmFrame(
   rows: SwarmRow[],
   elapsedMs: number,
   now: number,
   columns: number,
-  height: number
+  height: number,
+  color = false
 ): string {
+  const colors = pc.createColors(color);
   const width = Math.max(1, columns - 1);
   const clip = (line: string) => (line.length <= width ? line : line.slice(0, width - 1) + "…");
-  const lines = [progress(rows, elapsedMs)];
-  if (height <= 3) return clip(lines[0]!);
+  const lines = [clip(progress(rows, elapsedMs))];
+  if (height <= 3) return lines[0]!;
   const capacity = Math.max(0, height - 4);
   let visible = rows;
   if (rows.length > capacity) {
@@ -59,9 +87,22 @@ export function swarmFrame(
     const selected = new Set([...priority, ...remaining].slice(0, slots));
     visible = rows.filter((row) => selected.has(row));
   }
-  lines.push("", ...visible.map((row) => rowText(row, now)));
-  if (visible.length < rows.length) lines.push(`… ${rows.length - visible.length} more chunks`);
-  return lines.map(clip).join("\n");
+  lines.push(
+    "",
+    ...visible.map((row) => {
+      const line = clip(rowText(row, now));
+      const labelEnd = 2 + `[${terminalText(row.id)}]`.length;
+      return (
+        colors[STATUS_COLOR[row.status]](line.slice(0, 1)) +
+        line.slice(1, 2) +
+        colors[row.color ?? "cyanBright"](line.slice(2, labelEnd)) +
+        line.slice(labelEnd)
+      );
+    })
+  );
+  if (visible.length < rows.length)
+    lines.push(clip(`… ${rows.length - visible.length} more chunks`));
+  return lines.join("\n");
 }
 
 type OutputStream = NodeJS.WritableStream & { isTTY?: boolean; columns?: number; rows?: number };
@@ -72,6 +113,7 @@ export function createSwarmOutput(
 ): SwarmUI {
   const stream = options.stream ?? process.stderr;
   const terminal = options.terminal ?? (Boolean(stream.isTTY) && process.env.TERM !== "dumb");
+  const color = terminal && process.env.NO_COLOR === undefined;
   const update = terminal ? createLogUpdate(stream) : undefined;
   let rows: SwarmRow[] = [];
   let began = 0;
@@ -87,7 +129,7 @@ export function createSwarmOutput(
       0
     );
     const height = Math.max(1, (stream.rows ?? 24) - headerHeight);
-    update?.(swarmFrame(rows, Date.now() - began, Date.now(), columns, height));
+    update?.(swarmFrame(rows, Date.now() - began, Date.now(), columns, height, color));
   };
 
   const settle = (entry: SwarmEntry, error?: string) => {
@@ -104,7 +146,15 @@ export function createSwarmOutput(
   return {
     begin(data, entries, outputPath) {
       active = true;
+      const palette = [...AGENT_COLORS];
+      for (let index = palette.length - 1; index > 0; index--) {
+        const other = Math.floor(Math.random() * (index + 1));
+        [palette[index], palette[other]] = [palette[other]!, palette[index]!];
+      }
       rows = initialRows(data, entries);
+      rows.forEach((row, index) => {
+        row.color = palette[index % palette.length]!;
+      });
       began = lastChange = Date.now();
       const description =
         data.kind === "draft"
@@ -118,13 +168,16 @@ export function createSwarmOutput(
       for (const line of header) write(line);
       redraw();
       if (terminal) stream.on("resize", redraw);
-      timer = setInterval(() => {
-        if (terminal) redraw();
-        else if (Date.now() - lastChange >= 30000) {
-          write(progress(rows, Date.now() - began));
-          lastChange = Date.now();
-        }
-      }, 1000);
+      timer = setInterval(
+        () => {
+          if (terminal) redraw();
+          else if (Date.now() - lastChange >= 30000) {
+            write(progress(rows, Date.now() - began));
+            lastChange = Date.now();
+          }
+        },
+        terminal ? FRAME_INTERVAL_MS : 1000
+      );
       timer.unref();
     },
     start(key) {
