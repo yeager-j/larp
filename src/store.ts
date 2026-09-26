@@ -185,22 +185,13 @@ function isAlive(pid: number): boolean {
 
 /** Allocate the next numbered raw-output directory; existing attempts are never overwritten. */
 export function nextTurnDir(directory: string): string {
-  const path = turnDirPath(directory, latestTurn(directory) + 1);
+  const root = join(directory, "turns");
+  const numbers = existsSync(root) ? readdirSync(root).map(Number).filter(Number.isFinite) : [];
+  const path = join(root, String(Math.max(0, ...numbers) + 1).padStart(2, "0"));
 
   mkdirSync(path, { recursive: true });
 
   return path;
-}
-
-function latestTurn(directory: string): number {
-  const root = join(directory, "turns");
-  const numbers = existsSync(root) ? readdirSync(root).map(Number).filter(Number.isFinite) : [];
-
-  return Math.max(0, ...numbers);
-}
-
-function turnDirPath(directory: string, turn: number): string {
-  return join(directory, "turns", String(turn).padStart(2, "0"));
 }
 
 const TURN_PID_FILE = "harness.pid";
@@ -241,20 +232,25 @@ export function tryAcquireTurns(
   return lock;
 }
 
-/** Turns are sequential, so only the latest Turn can have a harness process that still runs. */
+/** Refuse while any Turn's harness process still runs; Turns of different Participants can overlap. */
 function refuseRunningTurn(directory: string): void {
-  const path = join(turnDirPath(directory, latestTurn(directory)), TURN_PID_FILE);
-  const pid = readPid(path);
-  if (pid === undefined) return;
+  const root = join(directory, "turns");
+  if (!existsSync(root)) return;
 
-  if (!isAlive(pid)) {
-    unlinkSync(path);
-    return;
+  for (const turn of readdirSync(root).filter((name) => Number.isFinite(Number(name)))) {
+    const path = join(root, turn, TURN_PID_FILE);
+    const pid = readPid(path);
+    if (pid === undefined) continue;
+
+    if (!isAlive(pid)) {
+      unlinkSync(path);
+      continue;
+    }
+
+    throw new Error(
+      `The harness process (PID ${pid}) of an earlier Turn is still running. Wait for it to exit or stop it, then retry. If that PID now belongs to another program, remove ${path}.`
+    );
   }
-
-  throw new Error(
-    `The harness process (PID ${pid}) of an earlier Turn is still running. Wait for it to exit or stop it, then retry. If that PID now belongs to another program, remove ${path}.`
-  );
 }
 
 /** A log entry before the log assigns its ID and time; distributes over entry unions. */

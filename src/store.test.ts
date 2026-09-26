@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout } from "node:timers/promises";
@@ -134,6 +134,24 @@ test("a harness process that outlives a killed Relay blocks the next Turn until 
   const lock = tryAcquireTurns(dir, "test.lock");
   assert.ok("release" in lock);
   assert.ok(!existsSync(pidFile), "the stale record is removed");
+  lock.release();
+});
+
+test("a live harness process in any Turn directory blocks the lock; other files are ignored", (t) => {
+  const dir = tempDir(t);
+  const earlier = join(dir, "turns", "01", "harness.pid");
+
+  mkdirSync(join(dir, "turns", "01"), { recursive: true });
+  mkdirSync(join(dir, "turns", "02"), { recursive: true });
+  writeFileSync(earlier, String(process.pid));
+
+  assert.throws(() => tryAcquireTurns(dir, "test.lock"), /harness process \(PID \d+\)/);
+
+  writeFileSync(earlier, "999999999");
+  writeFileSync(join(dir, "turns", ".DS_Store"), "");
+  const lock = tryAcquireTurns(dir, "test.lock");
+  assert.ok("release" in lock);
+  assert.ok(!existsSync(earlier), "the exited process's record is removed");
   lock.release();
 });
 

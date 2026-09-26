@@ -108,15 +108,12 @@ export class AgentStore {
 
   /** Caller messages that no committed reply has answered, read fresh from the log. */
   undelivered(): AgentEntry[] {
-    const entries = this.entries();
-    const delivered = new Set(entries.flatMap((entry) => entry.completion?.delivered ?? []));
-
-    return entries.filter((entry) => entry.kind === "message" && !delivered.has(entry.id));
+    return undeliveredIn(this.entries());
   }
 
   /** Harness session from the latest committed reply, read fresh from the log. */
   sessionId(): string | undefined {
-    return this.entries().findLast((entry) => entry.completion)?.completion?.sessionId;
+    return agentSession(this.entries());
   }
 
   /**
@@ -132,6 +129,18 @@ export class AgentStore {
   nextTurnDir(): string {
     return nextTurnDir(this.directory);
   }
+}
+
+/** Caller messages in `entries` that no committed reply has answered. */
+export function undeliveredIn(entries: AgentEntry[]): AgentEntry[] {
+  const delivered = new Set(entries.flatMap((entry) => entry.completion?.delivered ?? []));
+
+  return entries.filter((entry) => entry.kind === "message" && !delivered.has(entry.id));
+}
+
+/** Harness session from the latest committed reply in `entries`. */
+export function agentSession(entries: AgentEntry[]): string | undefined {
+  return entries.findLast((entry) => entry.completion)?.completion?.sessionId;
 }
 
 /** List saved Agent identities, newest first. */

@@ -73,10 +73,19 @@ export class RunStore {
    *   still running.
    */
   acquire(): () => void {
-    const lock = tryAcquireTurns(this.directory, "relay.lock");
+    const lock = this.tryAcquire();
     if ("heldBy" in lock) throw new Error(`Run already active in process ${lock.heldBy}.`);
 
     return lock.release;
+  }
+
+  /**
+   * Take the Relay lock, or report the live process that holds it.
+   *
+   * @throws When a harness process from an earlier Turn is still running.
+   */
+  tryAcquire(): ReturnType<typeof tryAcquireTurns> {
+    return tryAcquireTurns(this.directory, "relay.lock");
   }
 
   /** Read entries in durable order; ignore a torn final line after a crash. */

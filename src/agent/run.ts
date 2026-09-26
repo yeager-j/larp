@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
 
 import { TurnInterrupted } from "../harness/spawn.js";
-import { attemptTurn } from "../harness/turn.js";
 import type { Harness } from "../harness/types.js";
+import { drive } from "../kernel/drive.js";
+import type { DriveResult, Workflow } from "../kernel/types.js";
 import { agentEnvelope, agentRolePrompt } from "./prompt.js";
-import type { AgentData, AgentEntry, AgentStore } from "./store.js";
+import {
+  agentSession,
+  undeliveredIn,
+  type AgentData,
+  type AgentEntry,
+  type AgentStore,
+} from "./store.js";
 
 /** Outcome of one `deliver` call, with the replies this call committed before it ended. */
 export type Delivery =
@@ -12,6 +19,9 @@ export type Delivery =
   | { status: "queued"; heldBy: number }
   | { status: "failed"; replies: AgentEntry[]; error: string }
   | { status: "interrupted"; replies: AgentEntry[] };
+
+/** How one driver pass over the Agent ended. */
+type AgentOutcome = { kind: "replied" } | { kind: "failed"; error: string };
 
 /**
  * Deliver every waiting Caller message, one Turn at a time, until none remain.
@@ -28,69 +38,83 @@ export async function deliver(
   const replies: AgentEntry[] = [];
 
   while (true) {
-    const lock = agent.tryAcquire();
-    if ("heldBy" in lock)
-      return replies.length
-        ? { status: "replied", replies }
-        : { status: "queued", heldBy: lock.heldBy };
+    let result: DriveResult<AgentOutcome>;
 
     try {
-      for (let waiting = agent.undelivered(); waiting.length; waiting = agent.undelivered()) {
-        const turn = await runAgentTurn(agent, harnesses, waiting);
-        if ("error" in turn) return { status: "failed", replies, error: turn.error };
-
-        replies.push(turn.reply);
-      }
+      result = await drive(agent, agentWorkflow(agent, replies), { harnesses });
     } catch (error) {
       if (error instanceof TurnInterrupted) return { status: "interrupted", replies };
 
       throw error;
-    } finally {
-      lock.release();
     }
+
+    if (result.status === "held")
+      return replies.length
+        ? { status: "replied", replies }
+        : { status: "queued", heldBy: result.heldBy };
+    if (result.outcome.kind === "failed")
+      return { status: "failed", replies, error: result.outcome.error };
 
     // A Caller can append after the last check but before the release; check again unlocked.
     if (!agent.undelivered().length) return { status: "replied", replies };
   }
 }
 
-async function runAgentTurn(
+/** Deliver waiting messages until none remain; stop at the first failure in this process. */
+function agentWorkflow(
   agent: AgentStore,
-  harnesses: Record<"claude" | "codex", Harness>,
-  waiting: AgentEntry[]
-): Promise<{ reply: AgentEntry } | { error: string }> {
+  replies: AgentEntry[]
+): Workflow<AgentEntry, "agent", undefined, never, AgentOutcome> {
   const { participant, cwd } = agent.data;
-  const sessionId = agent.sessionId();
-  const outcome = await attemptTurn(harnesses[participant.harness], () => ({
-    cwd,
-    model: participant.model,
-    effort: participant.effort,
-    extraArgs: participant.extraArgs,
-    permission: participant.permission,
-    web: participant.web ?? false,
-    rolePrompt: agentRolePrompt(participant.instructions),
-    prompt: agentEnvelope(waiting),
-    ...(participant.schema ? { schema: participant.schema } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    turnDir: agent.nextTurnDir(),
-    onEvent() {},
-  }));
+  const recordFailure = (error: string) => {
+    agent.append(entry({ from: "relay", kind: "failure", body: error }));
+  };
 
-  if (!outcome.ok) return recordFailure(agent, outcome.error);
+  return {
+    next(entries, { resumedAt }) {
+      const failure = entries.slice(resumedAt).find((entry) => entry.kind === "failure");
+      if (failure) return { kind: "done", outcome: { kind: "failed", error: failure.body } };
 
-  const reply = replyFields(outcome.output, Boolean(participant.schema));
-  if ("error" in reply) return recordFailure(agent, reply.error);
+      const waiting = undeliveredIn(entries);
+      if (!waiting.length) return { kind: "done", outcome: { kind: "replied" } };
 
-  const committed = entry({
-    from: "agent",
-    kind: "reply",
-    ...reply,
-    completion: { sessionId: outcome.sessionId, delivered: waiting.map((item) => item.id) },
-  });
+      const sessionId = agentSession(entries);
 
-  agent.append(committed);
+      return {
+        kind: "turns",
+        turns: [
+          {
+            key: "agent",
+            participant,
+            cwd,
+            permission: participant.permission,
+            rolePrompt: agentRolePrompt(participant.instructions),
+            prompt: agentEnvelope(waiting),
+            ...(participant.schema ? { schema: participant.schema } : {}),
+            ...(sessionId ? { sessionId } : {}),
+            delivered: waiting.map((item) => item.id),
+            detail: undefined,
+          },
+        ],
+      };
+    },
+    commit(turn, outcome) {
+      if (!outcome.ok) return recordFailure(outcome.error);
 
-  return { reply: committed };
+      const reply = replyFields(outcome.output, Boolean(participant.schema));
+      if ("error" in reply) return recordFailure(reply.error);
+
+      const committed = entry({
+        from: "agent",
+        kind: "reply",
+        ...reply,
+        completion: { sessionId: outcome.sessionId, delivered: turn.delivered },
+      });
+
+      agent.append(committed);
+      replies.push(committed);
+    },
+  };
 }
 
 /** A structured reply is shown as formatted JSON; a free-text reply must be text. */
@@ -103,12 +127,6 @@ function replyFields(
   if (typeof output !== "string") return { error: "Harness returned no reply text." };
 
   return { body: output };
-}
-
-function recordFailure(agent: AgentStore, error: string): { error: string } {
-  agent.append(entry({ from: "relay", kind: "failure", body: error }));
-
-  return { error };
 }
 
 function entry(fields: Omit<AgentEntry, "id" | "at">): AgentEntry {

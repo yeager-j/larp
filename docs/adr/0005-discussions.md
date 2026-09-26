@@ -23,4 +23,4 @@ status: accepted
 
 - **Both sides edit a shared text.** Symmetric, but it drifts and makes agreement hard to define. Rejected.
 - **A reconcile Turn in blind mode**, where the Author merges both independent answers before the first Verdict. It costs one more Turn, and the Critic's Verdict on v1, with its own answer in context, gives the same pressure. Rejected.
-- **Rebuilding `larp plan` on the Discussion loop.** Possible later. The plan Workflow has Gates, a Human, and a handoff that a Discussion does not need.
+- **Rebuilding `larp plan` on the Discussion loop.** Possible later. The plan Workflow has Gates, a Human, and a handoff that a Discussion does not need. ADR 0007 replaces this option: plan, discuss, and agent now share one relay kernel.

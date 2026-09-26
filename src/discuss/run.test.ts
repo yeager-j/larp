@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
 import { participantFor, type Participant } from "../config.js";
@@ -376,4 +378,45 @@ test("a Discussion held by a live process is refused", async (t) => {
     new RegExp(`Discussion ${store.data.id} is running in process ${process.pid}\\.`)
   );
   lock.release();
+});
+
+test("a lock error keeps its own message, without the resume hint", async (t) => {
+  const { store } = create(t, false);
+  const turns: TurnRequest[] = [];
+
+  mkdirSync(join(store.directory, "turns", "01"), { recursive: true });
+  writeFileSync(join(store.directory, "turns", "01", "harness.pid"), String(process.pid));
+
+  await assert.rejects(
+    runDiscussion(
+      store,
+      fakeHarnesses(
+        turns,
+        script(() => "agree")
+      )
+    ),
+    (error: Error) =>
+      /^The harness process \(PID \d+\)/.test(error.message) && !/Resume with/.test(error.message)
+  );
+  assert.equal(turns.length, 0);
+});
+
+test("an error after the lock is taken keeps the resume hint", async (t) => {
+  const { store } = create(t, false);
+  const turns: TurnRequest[] = [];
+
+  store.entries = () => {
+    throw new Error("log unreadable");
+  };
+
+  await assert.rejects(
+    runDiscussion(
+      store,
+      fakeHarnesses(
+        turns,
+        script(() => "agree")
+      )
+    ),
+    /log unreadable\nResume with: larp discuss resume/
+  );
 });

@@ -136,12 +136,6 @@ export class DiscussionStore {
     return readRecords<DiscussEntry>(logPath(this.directory));
   }
 
-  /** Harness session from the side's latest committed entry, read fresh from the log. */
-  sessionId(side: Side): string | undefined {
-    return this.entries().findLast((entry): entry is SideEntry => entry.from === side)?.completion
-      .sessionId;
-  }
-
   /**
    * Take the Turn lock, or report the live process that holds it.
    *
@@ -155,6 +149,11 @@ export class DiscussionStore {
   nextTurnDir(): string {
     return nextTurnDir(this.directory);
   }
+}
+
+/** Harness session from the side's latest committed entry. */
+export function sideSession(entries: DiscussEntry[], side: Side): string | undefined {
+  return entries.findLast((entry): entry is SideEntry => entry.from === side)?.completion.sessionId;
 }
 
 /** List saved Discussion identities, newest first. */

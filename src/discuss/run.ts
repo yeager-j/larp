@@ -2,11 +2,25 @@ import { randomUUID } from "node:crypto";
 
 import type { Participant } from "../config.js";
 import { TurnInterrupted } from "../harness/spawn.js";
-import { attemptTurn, type TurnOutcome } from "../harness/turn.js";
+import type { TurnOutcome } from "../harness/turn.js";
 import type { Harness, HarnessEvent } from "../harness/types.js";
+import { drive } from "../kernel/drive.js";
+import type {
+  DriveResult,
+  Step as KernelStep,
+  TurnSpec,
+  Workflow,
+  WorkflowLog,
+} from "../kernel/types.js";
 import type { Unsaved } from "../store.js";
 import { discussEnvelope, discussRolePrompt } from "./prompt.js";
-import type { DiscussEntry, DiscussionData, DiscussionStore, Side } from "./store.js";
+import {
+  sideSession,
+  type DiscussEntry,
+  type DiscussionData,
+  type DiscussionStore,
+  type Side,
+} from "./store.js";
 import {
   nextStep,
   PROPOSAL_SCHEMA,
@@ -18,6 +32,15 @@ import {
 } from "./workflow.js";
 
 type TurnStep = Extract<Step, { kind: "turn" }>;
+/** Display data for one Discussion Turn. */
+interface TurnDetail {
+  round: number;
+  mode: TurnStep["mode"];
+  retry: boolean;
+}
+type DiscussTurn = TurnSpec<Side, TurnDetail>;
+/** A Discussion that must stop in this process; `resume` tries its Turn again. */
+type Stopped = { kind: "stopped"; reason: string };
 
 /** Display callbacks for a running Discussion; each is optional. */
 export interface DiscussUI {
@@ -52,119 +75,168 @@ export async function runDiscussion(
   followup?: string
 ): Promise<Outcome> {
   const { id } = store.data;
-  const lock = store.tryAcquire();
-  if ("heldBy" in lock) throw new Error(`Discussion ${id} is running in process ${lock.heldBy}.`);
+  let locked = false;
+  const log: WorkflowLog<DiscussEntry> = {
+    entries: () => store.entries(),
+    nextTurnDir: () => store.nextTurnDir(),
+    tryAcquire() {
+      const lock = store.tryAcquire();
+      locked = "release" in lock;
+      return lock;
+    },
+  };
+  let result: DriveResult<Outcome | Stopped>;
 
   try {
-    if (followup !== undefined) {
-      if (nextStep(store.data, store.entries()).kind === "turn")
-        throw new Error("It has not finished, so it cannot take a follow-up.");
-
-      const item = entry({ from: "caller", kind: "followup", body: followup });
-      store.append(item);
-      ui.entry?.(item);
-    }
-
-    while (true) {
-      const entries = store.entries();
-      const step = nextStep(store.data, entries);
-      if (step.kind !== "turn") return step;
-
-      await runTurn(store, harnesses, step, entries, ui);
-    }
-  } catch (error) {
-    const reason =
-      error instanceof TurnInterrupted
-        ? "Turn interrupted."
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    throw new Error(`Discussion ${id}: ${reason}\nResume with: larp discuss resume ${id}`, {
-      cause: error,
+    result = await drive(log, discussWorkflow(store, ui, followup), {
+      harnesses,
+      startTurn: (turn) =>
+        ui.startTurn?.({ side: turn.key, participant: turn.participant, ...turn.detail }),
+      event: (_turn, event) => ui.event?.(event),
     });
-  } finally {
-    lock.release();
+  } catch (error) {
+    // A lock error, such as a harness process that still runs, is not fixed by resuming.
+    if (!locked) throw error;
+
+    throw resumable(id, error);
   }
+
+  if (result.status === "held")
+    throw new Error(`Discussion ${id} is running in process ${result.heldBy}.`);
+  if (result.outcome.kind === "stopped") throw resumable(id, new Error(result.outcome.reason));
+
+  return result.outcome;
 }
 
-/** Run one Turn, retrying once with a note when the reply is invalid. */
-async function runTurn(
+function resumable(id: string, error: unknown): Error {
+  const reason =
+    error instanceof TurnInterrupted
+      ? "Turn interrupted."
+      : error instanceof Error
+        ? error.message
+        : String(error);
+
+  return new Error(`Discussion ${id}: ${reason}\nResume with: larp discuss resume ${id}`, {
+    cause: error,
+  });
+}
+
+function discussWorkflow(
   store: DiscussionStore,
-  harnesses: Record<"claude" | "codex", Harness>,
-  step: TurnStep,
-  entries: DiscussEntry[],
-  ui: DiscussUI
-): Promise<void> {
-  const participant = store.data.participants[step.role];
-  const sessionId = store.sessionId(step.role);
-  const round = entries.filter((entry) => entry.kind === "verdict").length + 1;
-  let retry: string | undefined;
+  ui: DiscussUI,
+  followup: string | undefined
+): Workflow<DiscussEntry, Side, TurnDetail, never, Outcome | Stopped> {
   const commit = (item: DiscussEntry) => {
     store.append(item);
     ui.entry?.(item);
   };
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    ui.startTurn?.({ side: step.role, participant, round, mode: step.mode, retry: attempt > 1 });
+  return {
+    begin(entries) {
+      if (followup === undefined) return;
+      if (nextStep(store.data, entries).kind === "turn")
+        throw new Error("It has not finished, so it cannot take a follow-up.");
 
-    const outcome = await attemptTurn(harnesses[participant.harness], () => ({
-      cwd: store.data.cwd,
-      model: participant.model,
-      effort: participant.effort,
-      extraArgs: participant.extraArgs,
-      permission: "read-only",
-      web: participant.web ?? false,
-      rolePrompt: discussRolePrompt(step.role, participant.instructions),
-      prompt: discussEnvelope({
-        data: store.data,
-        entries,
-        step,
-        first: !sessionId,
-        ...(retry ? { retry } : {}),
-      }),
-      schema: step.mode === "verdict" ? VERDICT_SCHEMA : PROPOSAL_SCHEMA,
-      ...(sessionId ? { sessionId } : {}),
-      turnDir: store.nextTurnDir(),
-      onEvent: (event) => ui.event?.(event),
-    }));
+      commit(entry({ from: "caller", kind: "followup", body: followup }));
+    },
+    next: (entries, { resumedAt }) => discussStep(store.data, entries, resumedAt),
+    commit(turn, outcome, entries) {
+      if (!outcome.ok) {
+        commit(entry({ from: "relay", kind: "failure", role: turn.key, body: outcome.error }));
+        throw new Error(`${turn.key} Turn failed: ${outcome.error}`);
+      }
 
-    if (!outcome.ok) {
-      commit(entry({ from: "relay", kind: "failure", role: step.role, body: outcome.error }));
-      throw new Error(`${step.role} Turn failed: ${outcome.error}`);
-    }
+      commit(
+        replyEntry(turn.detail.mode, outcome, entries) ??
+          entry({
+            from: "relay",
+            kind: "failure",
+            role: turn.key,
+            body: `Invalid reply: ${invalidReplyNote(turn.detail.mode)}`,
+          })
+      );
+    },
+  };
+}
 
-    const reply = replyEntry(step, outcome, entries);
-    if (reply) {
-      commit(reply);
-      return;
-    }
+/**
+ * The next Discussion Step: the outcome, or the pending Turn. An invalid reply is retried once in
+ * the same process with a note; a second one stops the Discussion for `resume`.
+ */
+function discussStep(
+  data: DiscussionData,
+  entries: DiscussEntry[],
+  resumedAt: number
+): KernelStep<Side, TurnDetail, never, Outcome | Stopped> {
+  const step = nextStep(data, entries);
+  if (step.kind !== "turn") return { kind: "done", outcome: step };
 
-    retry = `it did not match the ${step.mode === "verdict" ? "verdict" : "proposal"} schema, or a required text field was empty.`;
-    commit(
-      entry({ from: "relay", kind: "failure", role: step.role, body: `Invalid reply: ${retry}` })
-    );
-  }
+  const attemptsFrom = Math.max(resumedAt, entries.findLastIndex((e) => e.kind !== "failure") + 1);
+  const invalidReplies = entries.slice(attemptsFrom).length;
 
-  throw new Error(`${step.role} replied twice with an invalid reply.`);
+  if (invalidReplies >= 2)
+    return {
+      kind: "done",
+      outcome: { kind: "stopped", reason: `${step.role} replied twice with an invalid reply.` },
+    };
+
+  return { kind: "turns", turns: [discussTurn(data, entries, step, invalidReplies === 1)] };
+}
+
+function discussTurn(
+  data: DiscussionData,
+  entries: DiscussEntry[],
+  step: TurnStep,
+  retry: boolean
+): DiscussTurn {
+  const participant = data.participants[step.role];
+  const sessionId = sideSession(entries, step.role);
+
+  return {
+    key: step.role,
+    participant,
+    cwd: data.cwd,
+    permission: "read-only",
+    rolePrompt: discussRolePrompt(step.role, participant.instructions),
+    prompt: discussEnvelope({
+      data,
+      entries,
+      step,
+      first: !sessionId,
+      ...(retry ? { retry: invalidReplyNote(step.mode) } : {}),
+    }),
+    schema: step.mode === "verdict" ? VERDICT_SCHEMA : PROPOSAL_SCHEMA,
+    ...(sessionId ? { sessionId } : {}),
+    delivered: [],
+    detail: {
+      round: entries.filter((entry) => entry.kind === "verdict").length + 1,
+      mode: step.mode,
+      retry,
+    },
+  };
+}
+
+function invalidReplyNote(mode: TurnStep["mode"]): string {
+  return `it did not match the ${mode === "verdict" ? "verdict" : "proposal"} schema, or a required text field was empty.`;
 }
 
 /** Build the committed entry for a valid reply; the Relay sets the version. */
 function replyEntry(
-  step: TurnStep,
+  mode: TurnStep["mode"],
   { output, sessionId }: Extract<TurnOutcome, { ok: true }>,
   entries: DiscussEntry[]
 ): DiscussEntry | undefined {
   const completion = { sessionId };
   const proposals = entries.filter((entry) => entry.kind === "proposal");
 
-  if (step.mode === "verdict")
+  if (mode === "verdict")
     return validVerdict(output)
       ? entry({ from: "critic", kind: "verdict", ...output, version: proposals.length, completion })
       : undefined;
 
   if (!validProposal(output)) return undefined;
 
-  return step.mode === "draft"
+  return mode === "draft"
     ? entry({ from: "critic", kind: "draft", ...output, completion })
     : entry({
         from: "author",
