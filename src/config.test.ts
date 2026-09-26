@@ -71,6 +71,7 @@ test("Participants copy Role settings for the chosen harness and Role instructio
       extraArgs: { claude: ["--c"], codex: ["--x"] },
     }
   );
+  planner.permission = "write";
   const reviewer = builtInRole("reviewer", { harness: "claude", model: "haiku" });
   const resolved = participantsFor(
     { planner, reviewer },
@@ -82,6 +83,7 @@ test("Participants copy Role settings for the chosen harness and Role instructio
     effort: "low",
     extraArgs: ["--x"],
     instructions: planner.instructions,
+    permission: "write",
     web: true,
   });
   assert.equal(resolved.reviewer.model, "haiku");

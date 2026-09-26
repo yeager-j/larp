@@ -339,9 +339,13 @@ process.stdin.on('end', () => {
   assert.equal(requests.length, 5);
   assert.match(requests[0].prompt, /Intended execution Role/);
   assert.equal(requests[0].args[requests[0].args.indexOf("--model") + 1], "swarm-planner-model");
-  assert.match(requests[0].prompt, /You plan read-only swarms/);
+  assert.match(requests[0].prompt, /You plan independent swarms/);
+  assert.equal(requests[0].args[requests[0].args.indexOf("--permission-mode") + 1], "plan");
+  for (const request of requests.slice(1)) {
+    assert.ok(request.args.includes("--dangerously-skip-permissions"));
+    assert.doesNotMatch(request.prompt, /Never edit files|LARP read-only swarm/);
+  }
   for (const request of requests) {
-    assert.equal(request.args[request.args.indexOf("--permission-mode") + 1], "plan");
     assert.equal(request.nested, "1");
     assert.ok(!request.args.includes("--resume"));
   }

@@ -33,6 +33,7 @@ const participant = {
   effort: "medium",
   extraArgs: [],
   web: false,
+  permission: "read-only",
 };
 const instructions = `Explain what each assigned LARP source module does. For each file, write a Markdown heading containing its exact repository-relative path, then two to four sentences about its responsibility and how it connects to other modules. Read the files before explaining them. Simply explain the existing code; do not review style, propose changes, run tests, or edit files. Use your own tools directly; do not delegate to subagents.`;
 const task = `Explain what every non-test TypeScript module under src/ in LARP does. Include test-support.ts as a source module. Split the work into 3 to 6 independent chunks of related modules. Use only explicit file paths from the inventory below: include every file exactly once across all chunk paths, with no directories, omitted files, duplicate paths, or additional files. Each chunk must explain all its assigned modules. Do not delegate to subagents.\n\nModule inventory:\n${modules.join("\n")}`;

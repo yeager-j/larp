@@ -443,3 +443,45 @@ test("a draft can finish starting after its output was reserved before metadata 
   assert.equal(execution.data.id, draft.data.id);
   assert.equal(SwarmStore.open(draft.data.id, root).data.kind, "execution");
 });
+
+for (const harness of ["claude", "codex"] as const) {
+  for (const permission of ["read-only", "write"] as const) {
+    for (const kind of ["draft", "execution"] as const) {
+      test(`${harness} ${kind} uses saved ${permission} Role permission on start and resume`, async (t) => {
+        const root = tempDir(t);
+        const participant = {
+          ...participants.planner,
+          harness,
+          permission,
+          instructions: "Track this task in a temporary file when permitted.",
+        };
+        const store =
+          kind === "draft"
+            ? SwarmStore.createDraft({ task: "Sweep", participant }, root, root)
+            : SwarmStore.createExecution(
+                {
+                  document: { ...document, chunks: document.chunks.slice(0, 1) },
+                  participant,
+                  role: "style",
+                  parallel: 1,
+                },
+                root,
+                root
+              );
+        let attempts = 0;
+        const harnesses = fake(async (request) => {
+          assert.equal(request.permission, permission);
+          assert.match(request.rolePrompt, /Track this task in a temporary file/);
+          assert.doesNotMatch(request.rolePrompt, /Never edit files|LARP read-only swarm/);
+          if (++attempts === 1) return { sessionId: "s", exitCode: 1, error: "temporary failure" };
+          return ok(kind === "draft" ? document : "Report");
+        });
+        if (kind === "draft") await assert.rejects(runSwarm(store, harnesses), /temporary failure/);
+        else assert.equal((await runSwarm(store, harnesses)).kind, "execution");
+        participant.permission = permission === "write" ? "read-only" : "write";
+        await runSwarm(SwarmStore.open(store.data.id, root), harnesses);
+        assert.equal(attempts, 2);
+      });
+    }
+  }
+}

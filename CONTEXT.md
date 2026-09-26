@@ -1,6 +1,6 @@
 # LARP (LLM Agent Relay Protocol)
 
-A relay that lets sessions on different coding harnesses (Claude Code, Codex) exchange messages and take turns on a shared task, without either harness knowing the other's API. LARP is not a harness: it moves Messages and starts Turns, nothing more. It runs Workflows, lets a harness session start a standalone Agent, runs Discussions between two models, and fans out read-only repository work with Swarms.
+A relay that lets sessions on different coding harnesses (Claude Code, Codex) exchange messages and take turns on a shared task, without either harness knowing the other's API. LARP is not a harness: it moves Messages and starts Turns, nothing more. It runs Workflows, lets a harness session start a standalone Agent, runs Discussions between two models, and fans out repository work with Swarms using the selected Role’s permissions.
 
 ## Language
 
@@ -53,7 +53,7 @@ Two Participants, the Author and the Critic, answering one Caller message until 
 _Avoid_: debate, conversation, Run
 
 **Swarm**:
-A read-only workflow that drafts independent Chunks or executes a reviewed Chunk document. Starting a generated chunk file transitions its draft to execution under the same identity in `~/.larp/swarms/`. Copied or hand-written files create new identities. One log owns progress for all Chunks in an execution. A Swarm Participant is not a standalone Agent.
+A workflow that respects Role permissions and drafts independent Chunks or executes a reviewed Chunk document. Starting a generated chunk file transitions its draft to execution under the same identity in `~/.larp/swarms/`. Copied or hand-written files create new identities. One log owns progress for all Chunks in an execution. A Swarm Participant is not a standalone Agent.
 
 **Chunk**:
 One independent reporting scope: a unique ID, literal paths relative to the execution directory, and focus instructions. Paths scope the findings, not the files a Participant may read for context. Each successful Chunk produces one Markdown report.

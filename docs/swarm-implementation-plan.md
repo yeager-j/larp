@@ -1,10 +1,10 @@
-# Read-only swarms: implementation plan
+# Swarms: implementation plan
 
 Status: approved and implemented. This document records the agreed contract; see README.md for usage.
 
 ## Outcome
 
-Add a workflow that splits a repository task into editable chunks, then runs one independent Participant per chunk. The first use case is a code style sweep. Both the splitter and chunk Participants use the existing read-only Harness permission profiles. LARP saves each final chunk reply as Markdown.
+Add a workflow that splits a repository task into editable chunks, then runs one independent Participant per chunk. The first use case is a code style sweep. Both the splitter and chunk Participants use the existing Harness profile for their saved Role permission. LARP saves each final chunk reply as Markdown.
 
 The Caller reviews the chunk file between `init` and `start`. There is no interactive approval prompt, background service, or automatic execution after chunking.
 
@@ -23,7 +23,7 @@ larp swarm list
 larp swarm show <swarm-id>
 ```
 
-- `init` requires a nonempty `--message`. Its optional `--role` supplies the intended chunk Role's name, description, and instructions as context for splitting. The dedicated `swarm-planner` Role supplies the splitter's Harness, model, effort, web setting, and chunking guidance. The workflow owns the read-only rules and chunk schema. `larp config` creates this Role when missing, including for existing installations, using the existing model picker and preserving customized Role content. Built-in setup Roles remain separate from the plan workflow's Participant list.
+- `init` requires a nonempty `--message`. Its optional `--role` supplies the intended chunk Role's name, description, and instructions as context for splitting. The dedicated `swarm-planner` Role supplies the splitter's Harness, model, effort, web setting, and chunking guidance. The workflow respects the planner Role’s permission and owns the chunk schema. `larp config` creates this Role when missing, including for existing installations, using the existing model picker and preserving customized Role content. Built-in setup Roles remain separate from the plan workflow's Participant list.
 - `start` requires `--chunks` and `--role`. It can consume a hand-written file, so `init` is optional. A generated `~/.larp/swarms/<id>/chunks.json` keeps its swarm identity and directory. Copied or hand-written files create new identities. A second start on the managed file is refused; use resume or copy the file outside its swarm directory for a fresh execution.
 - `--parallel` defaults to 3 and accepts integers from 1 through 8 for v1. This bounds direct Harness processes, not any subagents a Harness creates internally. The upper bound keeps the first release's process and signal handling modest.
 - `--out` applies only to `start`. It is resolved against the command's working directory and must name a directory that does not yet exist. LARP creates it exclusively before starting any chunk. This prevents two swarms from sharing output files. Without it, use the execution's `results/` directory.
@@ -130,7 +130,7 @@ Each `init` creates a draft ID. Starting its generated chunk file keeps that ID.
 
 Implement swarm policy on `drive()` and `Workflow`, using one Turn key per chunk. Do not launch `larp agent start` subprocesses or create an `AgentStore` per chunk. Swarm Participants belong to the swarm log and do not appear in `larp agent list`.
 
-The splitter runs one Turn with the strict chunk schema. Each chunk runs an independent Turn with its Role instructions, the overall task, chunk ID, paths, focus, read-only rule, and Markdown reply requirement. It does not receive other chunks' findings. The workflow owns the output contract: as with other workflows, a Role's optional standalone-Agent `schema` does not override it. Worker replies are nonempty text; an explicit statement that no issues were found is valid.
+The splitter runs one Turn with the strict chunk schema. Each chunk runs an independent Turn with its Role instructions, the overall task, chunk ID, paths, focus, Role permissions, and Markdown reply requirement. It does not receive other chunks' findings. The workflow owns the output contract: as with other workflows, a Role's optional standalone-Agent `schema` does not override it. Worker replies are nonempty text; an explicit statement that no issues were found is valid.
 
 `next(entries, { resumedAt })` returns unfinished chunks in manifest order. A chunk is eligible when it has no successful reply and has not failed during the current invocation. `drive({ parallel })` fills available slots and prevents concurrent Turns for the same key. This gives one attempt per unfinished chunk per invocation and no automatic retry loop.
 
@@ -140,7 +140,7 @@ On resume, retry failed and uncommitted chunks once each. Start a fresh Harness 
 
 Persistence failures and interruption stop scheduling through the existing kernel error path. Allow in-flight Turns to settle before releasing the lock. Existing signal forwarding reaches the running Harness processes. An interrupted Turn commits no reply. Keep orphan-process checks and test interruption with several real fake-child processes, not only an in-memory Harness.
 
-Force `permission: "read-only"` on every Turn even if a selected Role says `write`. Retain Role web settings and the existing trusted extra-argument behavior used by plan/discuss. Document the same limitation: user-supplied Harness arguments must not bypass permissions or session recording. This feature does not introduce a stronger security sandbox than the existing workflows.
+Snapshot the selected Role’s permission and use it on every Turn, including retries. The planner uses `swarm-planner`; workers use the execution Role. Older saved Participants without permission retain read-only behavior. Do not reload Role files on resume. The workflow prompt must not prohibit file writes for a write-enabled Role. Retain Role web settings and the existing trusted extra-argument behavior used by plan/discuss. Document the same limitation: user-supplied Harness arguments must not bypass permissions or session recording. This feature does not introduce a stronger security sandbox than the existing workflows.
 
 ## Module and API sketch
 
@@ -193,7 +193,7 @@ No scheduler or Harness API change is expected. Keep refactoring of existing com
 1. **Chunk contract.** Add schema and parser tests, including round-trip preservation of a valid user-edited file and useful failures for invalid scope/IDs.
 2. **Persistence.** Add the store, saved draft/execution inputs and the locked transition, output-directory reservation, log entries, and recovery/materialization tests. Use the existing single-writer append helpers under the swarm lock.
 3. **Chunking.** Add splitter prompt composition and the draft workflow. Prove the intended Role reaches the splitter as context and that the workflow schema governs its reply. Save editable output and handle failed/interrupted init via resume.
-4. **Parallel execution.** Add chunk prompts and scheduling on the kernel. Prove bounded concurrency, failure isolation, one attempt per invocation, read-only requests, and resume without repeating completed work.
+4. **Parallel execution.** Add chunk prompts and scheduling on the kernel. Prove bounded concurrency, failure isolation, one attempt per invocation, Role permission propagation, and resume without repeating completed work.
 5. **CLI and terminal display.** Wire all commands and flags, Role snapshots, file loading, the live chunk list, plain-output fallback, nesting guard, and exit codes. Add `log-update`, persist attempt durations, and keep display timing separate from workflow state. Exercise init, edit, start, failure, and resume through the real CLI with fake Harness executables.
 6. **Documentation and checks.** Document the chosen contracts and add a Swarm ADR. Update ADR 0007's statement that no shipped command uses parallel Turns. Amend ADR 0002 narrowly: explicit `--out` may export generated reports inside a repository; LARP still owns no source or git state. Explain syntactic chunk validation without repository discovery. Update the historical design note to point to the new ADR.
 
@@ -205,7 +205,7 @@ No scheduler or Harness API change is expected. Keep refactoring of existing com
 - Editing the chunk file or Role files after startup does not change an execution or its resume.
 - With more chunks than slots, at most `parallel` Turns run at once; a free slot starts another chunk without waiting for the whole batch. Each completed chunk gets exactly one result file, regardless of completion order.
 - One failed chunk does not suppress the remaining chunks. Resume retries only failed/uncommitted chunks and reports whether all now succeeded.
-- Both Harness request types receive read-only permissions, even from a Role with write permission. Role schema settings cannot change the workflow's chunk or Markdown contracts.
+- Both Harness request types receive the selected Role’s permission for draft and execution Turns. Resume preserves it, and legacy snapshots without permission remain read-only. Role schema settings cannot change the workflow's chunk or Markdown contracts.
 - A committed reply whose export failed is materialized on resume without another model call. A draft's existing user edits survive resume.
 - A second process cannot run the same swarm, reuse a custom output directory, or bypass the existing live-Harness process guard. Symlink output targets are refused.
 - Interrupting several running fake Harness children forwards the signal, stops new scheduling, preserves committed results, and leaves remaining work resumable.
@@ -228,6 +228,6 @@ Tests use fake Harnesses and temporary directories; they do not make paid model 
 
 ## Scope and review decisions
 
-V1 excludes source edits, worktrees, dependency graphs, per-chunk Roles, model-generated summaries, deduplication, follow-up messaging, selective reruns, repository snapshots, and automatic retry/backoff. The Caller can edit a copy of the chunk file and start a new execution for a different scope.
+V1 excludes coordination of concurrent file edits, worktrees, dependency graphs, per-chunk Roles, model-generated summaries, deduplication, follow-up messaging, selective reruns, repository snapshots, and automatic retry/backoff. The Caller can edit a copy of the chunk file and start a new execution for a different scope.
 
 The defaults are: one ID from generated draft through execution, splitting through the dedicated `swarm-planner` Role, optional Role context at init, required Role at start, parallelism 3 with a maximum of 8, a new output directory per execution, one attempt per chunk per invocation, and fresh sessions on retries. Keep them consistent across help, tests, and the new ADR.

@@ -6,7 +6,7 @@ A local relay between Claude Code and Codex. A Planner writes a plan, a Reviewer
 
 A Claude Code or Codex session can also start a standalone Agent from a named Role, such as `larp agent start --role reviewer --message "Review my plan"`, without knowing which harness or model the Role uses. `larp discuss` lets two models discuss a question until they agree.
 
-`larp swarm` splits a repository task into editable chunks, then runs a read-only Participant for each chunk in parallel and saves Markdown reports.
+`larp swarm` splits a repository task into editable chunks, then runs a Participant with the selected Role’s permissions for each chunk in parallel and saves Markdown reports.
 
 Requires Node.js 24 or later and authenticated `claude` and/or `codex` executables on PATH. Desktop handoff currently requires macOS with the Codex desktop app installed.
 
@@ -38,7 +38,7 @@ codex-args: []
 You are a reviewer. Read what you are pointed to, inspect repository evidence, and report material problems first with file references.
 ```
 
-`description`, `harness`, and `model` are required. `effort` defaults to `high` and `permission` to `read-only`; `write` lets an Agent edit the working tree. `web` defaults to `true` and lets the model search and fetch the web (Claude `WebSearch` and `WebFetch`, Codex live `web_search`); set it to `false` for a Role that should use only local files and its own knowledge. The args are JSON arrays passed to the matching harness. `schema` is an optional JSON Schema path, relative to the roles directory, that an Agent's reply must match. You can create Role files by hand; `larp config` offers a model picker for each one. Roles are read only from this directory, never from a repository.
+`description`, `harness`, and `model` are required. `effort` defaults to `high` and `permission` to `read-only`; `write` lets an Agent or Swarm Participant edit files through the Harness. `web` defaults to `true` and lets the model search and fetch the web (Claude `WebSearch` and `WebFetch`, Codex live `web_search`); set it to `false` for a Role that should use only local files and its own knowledge. The args are JSON arrays passed to the matching harness. `schema` is an optional JSON Schema path, relative to the roles directory, that an Agent's reply must match. You can create Role files by hand; `larp config` offers a model picker for each one. Roles are read only from this directory, never from a repository.
 
 The plan Workflow uses `planner` and `reviewer`. It adds its own protocol and reply schema before the Role's instructions and always runs both Roles read-only.
 
@@ -135,7 +135,7 @@ larp swarm list
 larp swarm show <swarm-id>
 ```
 
-Create the named execution Role in `~/.config/larp/roles/` first; `style-reviewer` is an example, not a built-in Role. `init` uses the dedicated `swarm-planner` Role for its model, effort, Harness settings, and chunking guidance. Run `larp config` to create it on an existing installation, then edit `~/.config/larp/roles/swarm-planner.md` to customize its instructions. The workflow enforces read-only access and the chunk JSON format. The optional `--role` gives the splitter the intended execution criteria as context; it does not select the splitter. Its only stdout output is an absolute path to the editable chunk file:
+Create the named execution Role in `~/.config/larp/roles/` first; `style-reviewer` is an example, not a built-in Role. `init` uses the dedicated `swarm-planner` Role for its model, effort, Harness settings, and chunking guidance. Run `larp config` to create it on an existing installation, then edit `~/.config/larp/roles/swarm-planner.md` to customize its instructions. The workflow uses the planner Role’s file permissions and enforces the chunk JSON format. The optional `--role` gives the splitter the intended execution criteria as context; it does not select the splitter. Its only stdout output is an absolute path to the editable chunk file:
 
 ```json
 {
@@ -168,7 +168,7 @@ Agent IDs receive randomly assigned colors that stay fixed during the command. T
 
 A failed chunk does not stop other chunks. `resume` retries only unfinished chunks, once per invocation, in fresh Harness sessions. Committed replies are not regenerated: if writing a report failed, resume recreates it from the log. An interrupt stops new scheduling and preserves completed results. Resume uses the saved directory but reads its current files; repository content is not snapshotted. `list` shows committed progress, and `show` includes saved inputs, outcomes, errors, and artifact paths.
 
-Exit 0 means a draft is ready, or all chunk replies were saved and exported. Exit 1 means validation, a chunk, an interrupt, or an infrastructure operation failed. Reports containing findings still count as successful results. Every Turn uses the existing read-only permission profile even when the Role specifies `write`. Workflow output contracts override a Role's standalone-Agent schema: chunking returns JSON and execution returns Markdown. As with plan/discuss, trusted custom Harness args must not bypass permissions or session recording. There is no automatic report synthesis or source editing.
+Exit 0 means a draft is ready, or all chunk replies were saved and exported. Exit 1 means validation, a chunk, an interrupt, or an infrastructure operation failed. Reports containing findings still count as successful results. Swarm Turns respect the selected Role’s `permission`: the `swarm-planner` Role during `init`, and the execution Role during `start`. A `write` Role can maintain temporary files or make other Role-directed edits. Permissions are saved with the other inputs and reused on resume; older swarms without a saved permission remain read-only. To apply a Role’s write permission to such a run, start a new swarm from a copy of its chunk file. Workflow output contracts override a Role's standalone-Agent schema: chunking returns JSON and execution returns Markdown. As with plan/discuss, trusted custom Harness args must not bypass permissions or session recording. There is no automatic report synthesis, worktree isolation, or coordination of file edits between chunks.
 
 ## Development
 

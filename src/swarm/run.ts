@@ -156,7 +156,7 @@ function baseTurn(data: SwarmData, key: string): Omit<TurnSpec<string>, "rolePro
     key,
     participant: data.participant,
     cwd: data.cwd,
-    permission: "read-only",
+    permission: data.participant.permission ?? "read-only",
     delivered: [],
     detail: undefined,
   };
