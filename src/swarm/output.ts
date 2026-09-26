@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { createLogUpdate } from "log-update";
+import stringWidth from "string-width";
 
 import type { SwarmUI } from "./run.js";
 import type { SwarmData, SwarmEntry } from "./store.js";
@@ -75,37 +76,46 @@ export function createSwarmOutput(
   let rows: SwarmRow[] = [];
   let began = 0;
   let lastChange = 0;
+  let active = false;
+  let header: string[] = [];
   let timer: ReturnType<typeof setInterval> | undefined;
   const write = (line: string) => stream.write(terminalText(line) + "\n");
-  const redraw = () =>
-    update?.(
-      swarmFrame(rows, Date.now() - began, Date.now(), stream.columns ?? 80, stream.rows ?? 24)
+  const redraw = () => {
+    const columns = Math.max(1, stream.columns ?? 80);
+    const headerHeight = header.reduce(
+      (lines, line) => lines + Math.max(1, Math.ceil(stringWidth(line) / columns)),
+      0
     );
+    const height = Math.max(1, (stream.rows ?? 24) - headerHeight);
+    update?.(swarmFrame(rows, Date.now() - began, Date.now(), columns, height));
+  };
 
   const settle = (entry: SwarmEntry, error?: string) => {
     const row = rows.find((row) => row.id === entry.key);
     if (!row) return;
-    row.status = entry.kind === "failure" || error ? "Failed" : "Complete";
+    const display = settlement(entry, error);
+    row.status = display.status;
     row.durationMs = entry.durationMs;
     lastChange = Date.now();
     if (terminal) redraw();
-    else
-      write(
-        `[${row.status === "Failed" ? "fail" : "done"}] ${row.id} (${duration(entry.durationMs)})${error ? ` · Export failed: ${error}` : entry.kind === "failure" ? ` · ${entry.body}` : ""}`
-      );
+    else write(display.line);
   };
 
   return {
     begin(data, entries, outputPath) {
+      active = true;
       rows = initialRows(data, entries);
       began = lastChange = Date.now();
       const description =
         data.kind === "draft"
           ? "splitter"
           : `${data.role} · ${rows.length} chunks · parallel ${data.parallel}`;
-      write(`[larp] swarm ${data.id} · ${description}`);
-      write(`[larp] Repository: ${data.cwd}`);
-      write(`[larp] ${data.kind === "draft" ? "Chunks" : "Results"}: ${outputPath}`);
+      header = [
+        `[larp] swarm ${data.id} · ${description}`,
+        `[larp] Repository: ${data.cwd}`,
+        `[larp] ${data.kind === "draft" ? "Chunks" : "Results"}: ${outputPath}`,
+      ].map(terminalText);
+      for (const line of header) write(line);
       redraw();
       if (terminal) stream.on("resize", redraw);
       timer = setInterval(() => {
@@ -128,23 +138,36 @@ export function createSwarmOutput(
     settled: settle,
     exportFailed: settle,
     close() {
-      if (!timer) return;
+      if (!active) return;
+      active = false;
       clearInterval(timer);
       timer = undefined;
       stream.off("resize", redraw);
-      for (const row of rows) {
-        if (row.status !== "Running") continue;
-        row.status = "Interrupted";
-        row.durationMs = Date.now() - row.startedAt!;
-        if (!terminal) write(`[interrupted] ${row.id}`);
-      }
       try {
+        for (const row of rows) {
+          if (row.status !== "Running") continue;
+          row.status = "Interrupted";
+          row.durationMs = Date.now() - row.startedAt!;
+          if (!terminal) write(`[interrupted] ${row.id}`);
+        }
         redraw();
       } finally {
         update?.done();
       }
     },
   };
+}
+
+function settlement(
+  entry: SwarmEntry,
+  exportError?: string
+): { status: "Failed" | "Complete"; line: string } {
+  let failure: string | undefined;
+  if (entry.kind === "failure") failure = entry.body;
+  if (exportError !== undefined) failure = `Export failed: ${exportError}`;
+  const result = `${entry.key} (${duration(entry.durationMs)})`;
+  if (failure !== undefined) return { status: "Failed", line: `[fail] ${result} · ${failure}` };
+  return { status: "Complete", line: `[done] ${result}` };
 }
 
 function initialRows(data: SwarmData, entries: SwarmEntry[]): SwarmRow[] {

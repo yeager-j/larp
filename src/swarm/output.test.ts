@@ -116,3 +116,59 @@ test("live output redraws inline, restores saved durations, and cleans up on int
 test("display text cannot inject control sequences", () => {
   assert.equal(terminalText("a\x1b[31mb\x1b[0m\nc\x07"), "ab c ");
 });
+
+test("an initial redraw failure still finalizes the display when the workflow closes", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
+  const stream = Object.assign(new PassThrough(), { columns: 150, rows: 24, isTTY: true });
+  let output = "";
+  stream.on("data", (chunk) => {
+    output += chunk;
+  });
+  const write = stream.write.bind(stream);
+  let failed = false;
+  stream.write = ((chunk: string | Uint8Array) => {
+    if (!failed && String(chunk).includes("[progress]")) {
+      failed = true;
+      throw new Error("redraw failed");
+    }
+    return write(chunk);
+  }) as typeof stream.write;
+  const ui = createSwarmOutput({ stream, terminal: true });
+  assert.throws(() => ui.begin!(data, [], "/reports"), /redraw failed/);
+  ui.close!();
+  assert.match(output, /\[progress\]/);
+  assert.equal(stream.listenerCount("resize"), 0);
+  const final = output;
+  t.mock.timers.tick(60000);
+  assert.equal(output, final);
+});
+
+test("live rendering reserves space for headers, including wrapped wide-character paths", () => {
+  const stream = Object.assign(new PassThrough(), { columns: 100, rows: 12 });
+  let output = "";
+  stream.on("data", (chunk) => {
+    output += chunk;
+  });
+  const ui = createSwarmOutput({ stream, terminal: true });
+  const many: ExecutionData = {
+    ...data,
+    document: {
+      ...data.document,
+      chunks: Array.from({ length: 20 }, (_, index) => ({
+        id: `chunk-${index}`,
+        paths: ["."],
+        focus: "Review",
+      })),
+    },
+  };
+  try {
+    ui.begin!(many, [], "/" + "界".repeat(95));
+    const plain = terminalText(output);
+    // Five physical header lines leave seven rows; only two chunk rows plus an omission fit.
+    assert.match(plain, /18 more chunks/);
+    assert.match(plain, /\[chunk-1\] Queued/);
+    assert.doesNotMatch(plain, /\[chunk-2\]/);
+  } finally {
+    ui.close!();
+  }
+});

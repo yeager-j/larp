@@ -53,7 +53,7 @@ Use a fixed header and one live block on stderr. Update the progress line and ch
 
 The rows above illustrate the format; the real display lists all chunks when they fit. Keep rows in manifest order so IDs do not jump as their status changes. States are Queued, Running, Complete, Failed, and Interrupted. Running durations update once per second, with immediate redraws on state changes. Completed/failed durations stop at the end of that attempt. The aggregate elapsed timer measures the current command invocation; on resume, already completed chunks retain their saved duration. A chunk is shown Complete only after its committed reply has been exported successfully; export errors are reported separately and do not cause another model call.
 
-Use [`log-update`](https://github.com/sindresorhus/log-update) to redraw the multiline block through `createLogUpdate(process.stderr)`. It provides multiline replacement, stderr support, and final-frame persistence. Keep Clack for existing prompts; its [spinner/task-log APIs](https://bomb.sh/docs/clack/packages/prompts/) serve loading indicators and grouped logs, while this display needs replacement of a complete status frame. Add one display dependency, not a second task scheduler.
+Use [`log-update`](https://github.com/sindresorhus/log-update) to redraw the multiline block through `createLogUpdate(process.stderr)`. It provides multiline replacement, stderr support, and final-frame persistence. Keep Clack for existing prompts; its [spinner/task-log APIs](https://bomb.sh/docs/clack/packages/prompts/) serve loading indicators and grouped logs, while this display needs replacement of a complete status frame. Use `string-width` to account for wrapped header lines, including wide characters, when reserving space for the live block. Neither library schedules tasks.
 
 Enable redraw only when stderr is a terminal and `TERM` is not `dumb`. Render a frame from status data in `src/swarm/output.ts`; one renderer owns all writes during the live display. Do not print Harness events or use an independent spinner for each chunk. Sanitize terminal control characters in displayed paths and errors, respect `NO_COLOR`, and keep explicit status text so color is optional.
 
@@ -179,7 +179,7 @@ Use a discriminated metadata union so draft-only planner data and execution-only
 | `src/swarm/run.ts` | Driver integration, pure scheduling decisions, commits, recovery, and outcomes. Keep these together until size warrants a separate workflow file. |
 | `src/swarm/output.ts` | Pure frame formatting, live stderr redraw, plain-output fallback, elapsed timers, resize handling, and cleanup. |
 | `src/cli.ts` | Swarm command dispatch, valid flag combinations, Role resolution, limits, nesting guard, output and exit status. |
-| `package.json` and lockfile | Add `log-update` for the multiline status display. |
+| `package.json` and lockfile | Add `log-update` for the multiline status display and `string-width` for header sizing. |
 | Adjacent tests and `src/cli.test.ts` | Contract tests using temporary storage and fake Harnesses. |
 | `src/harness/adapters.test.ts` | Verify several spawned children receive interruption and release signal listeners/process records. Change runtime code only if this exposes a defect. |
 | `README.md`, `CONTEXT.md`, new ADR | Commands, storage, Swarm/Chunk vocabulary, concurrent Turn definitions, and design decisions. |
