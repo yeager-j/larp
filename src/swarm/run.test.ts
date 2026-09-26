@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -278,4 +278,168 @@ test("surviving Harness records block resume and successful Codex chunks use rea
   clearTurnProcess(dir);
   await runSwarm(store, harnesses);
   assert.equal(called, true);
+});
+
+test("starting generated chunks keeps the identity, log and Turns and rejects stale draft handles", async (t) => {
+  const root = tempDir(t);
+  const draft = SwarmStore.createDraft(
+    { task: "Sweep", participant: participants.planner },
+    root,
+    root
+  );
+  await runSwarm(
+    draft,
+    fake(async () => ok(document))
+  );
+  const planned = draft.entries();
+  const edited = { ...document, chunks: [{ id: "splitter", paths: ["src/"], focus: "Review" }] };
+  writeFileSync(draft.chunksPath, JSON.stringify(edited));
+  const execution = SwarmStore.startExecution(
+    draft.chunksPath,
+    {
+      participant: participants.reviewer,
+      role: "reviewer",
+      parallel: 2,
+    },
+    root,
+    root
+  );
+  assert.equal(execution.data.id, draft.data.id);
+  assert.equal(execution.data.createdAt, draft.data.createdAt);
+  assert.equal(execution.outputPath, join(draft.directory, "results"));
+  assert.deepEqual(execution.entries(), planned);
+  assert.equal(
+    execution.data.kind === "execution" && execution.data.participant.model,
+    participants.reviewer.model
+  );
+  await assert.rejects(
+    runSwarm(
+      draft,
+      fake(async () => {
+        throw new Error("must not launch");
+      })
+    ),
+    /changed phase/
+  );
+  const requests: TurnRequest[] = [];
+  const result = await runSwarm(
+    execution,
+    fake(async (req) => {
+      requests.push(req);
+      return ok("Report");
+    })
+  );
+  assert.equal(result.kind === "execution" && result.complete, 1);
+  assert.equal(requests.length, 1);
+  assert.notEqual(requests[0]!.turnDir, planned[0]!.turnDir);
+  assert.equal(readFileSync(join(execution.outputPath, "splitter.md"), "utf8"), "Report\n");
+  rmSync(draft.chunksPath);
+  await runSwarm(
+    SwarmStore.open(draft.data.id, root),
+    fake(async () => {
+      throw new Error("must not repeat");
+    })
+  );
+});
+
+test("starting a draft respects locks, validation and output ownership before changing phase", async (t) => {
+  const root = tempDir(t);
+  const draft = SwarmStore.createDraft(
+    { task: "Sweep", participant: participants.planner },
+    root,
+    root
+  );
+  await runSwarm(
+    draft,
+    fake(async () => ok(document))
+  );
+  const input = {
+    participant: participants.reviewer,
+    role: "reviewer",
+    parallel: 2,
+    out: join(root, "custom-results"),
+  };
+  const start = () => SwarmStore.startExecution(draft.chunksPath, input, root, root);
+  const lock = draft.tryAcquire();
+  assert.ok("release" in lock);
+  try {
+    assert.throws(start, /locked/);
+  } finally {
+    lock.release();
+  }
+  const turn = draft.nextTurnDir();
+  recordTurnProcess(turn, process.pid);
+  try {
+    assert.throws(start, /Harness|harness/);
+  } finally {
+    clearTurnProcess(turn);
+  }
+  writeFileSync(draft.chunksPath, "{}");
+  assert.throws(start);
+  assert.equal(SwarmStore.open(draft.data.id, root).data.kind, "draft");
+  writeFileSync(draft.chunksPath, JSON.stringify(document));
+  mkdirSync(input.out);
+  writeFileSync(join(input.out, "keep.txt"), "existing");
+  assert.throws(start, /not owned/);
+  assert.equal(readFileSync(join(input.out, "keep.txt"), "utf8"), "existing");
+  assert.equal(SwarmStore.open(draft.data.id, root).data.kind, "draft");
+  rmSync(input.out, { recursive: true });
+  const execution = start();
+  assert.equal(execution.outputPath, realpathSync(input.out));
+  assert.throws(start, /already started/);
+});
+
+test("copied chunk files create new swarms without changing the source draft", async (t) => {
+  const root = tempDir(t);
+  const draft = SwarmStore.createDraft(
+    { task: "Sweep", participant: participants.planner },
+    root,
+    root
+  );
+  await runSwarm(
+    draft,
+    fake(async () => ok(document))
+  );
+  const copy = join(root, "copied-chunks.json");
+  writeFileSync(copy, readFileSync(draft.chunksPath));
+  const execution = SwarmStore.startExecution(
+    copy,
+    {
+      participant: participants.reviewer,
+      role: "reviewer",
+      parallel: 1,
+    },
+    root,
+    root
+  );
+  assert.notEqual(execution.data.id, draft.data.id);
+  assert.equal(SwarmStore.open(draft.data.id, root).data.kind, "draft");
+  assert.equal(execution.outputPath, join(execution.directory, "results"));
+});
+
+test("a draft can finish starting after its output was reserved before metadata was saved", async (t) => {
+  const root = tempDir(t);
+  const draft = SwarmStore.createDraft(
+    { task: "Sweep", participant: participants.planner },
+    root,
+    root
+  );
+  await runSwarm(
+    draft,
+    fake(async () => ok(document))
+  );
+  mkdirSync(draft.outputPath);
+  writeFileSync(join(draft.outputPath, ".larp-swarm.json"), JSON.stringify({ id: draft.data.id }));
+  const execution = SwarmStore.startExecution(
+    draft.chunksPath,
+    {
+      participant: participants.reviewer,
+      role: "reviewer",
+      parallel: 1,
+    },
+    root,
+    root
+  );
+  assert.equal(execution.data.id, draft.data.id);
+  assert.equal(SwarmStore.open(draft.data.id, root).data.kind, "execution");
 });

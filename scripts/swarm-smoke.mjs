@@ -100,9 +100,9 @@ async function smoke() {
     `Every module must appear exactly once; inspect ${draft.chunksPath}.`
   );
 
-  const execution = SwarmStore.createExecution(
+  const execution = SwarmStore.startExecution(
+    draft.chunksPath,
     {
-      document,
       role: "module-explainer",
       participant: { ...participant, instructions },
       parallel: 3,
@@ -110,6 +110,8 @@ async function smoke() {
     undefined,
     cwd
   );
+  assert.equal(execution.data.id, draft.data.id);
+  assert.equal(execution.outputPath, join(draft.directory, "results"));
   console.log(`Execution: ${execution.data.id}`);
   const outcome = await runSwarm(execution, harnesses, createSwarmOutput());
   assert.equal(outcome.kind, "execution");

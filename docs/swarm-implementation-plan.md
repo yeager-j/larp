@@ -24,7 +24,7 @@ larp swarm show <swarm-id>
 ```
 
 - `init` requires a nonempty `--message`. Its optional `--role` supplies the intended chunk Role's name, description, and instructions as context for splitting. The dedicated `swarm-planner` Role supplies the splitter's Harness, model, effort, web setting, and chunking guidance. The workflow owns the read-only rules and chunk schema. `larp config` creates this Role when missing, including for existing installations, using the existing model picker and preserving customized Role content. Built-in setup Roles remain separate from the plan workflow's Participant list.
-- `start` requires `--chunks` and `--role`. It can consume a hand-written file, so `init` is optional. It always creates a new execution identity; it never infers a draft identity from the file path. Reusing a chunk file deliberately starts a fresh execution.
+- `start` requires `--chunks` and `--role`. It can consume a hand-written file, so `init` is optional. A generated `~/.larp/swarms/<id>/chunks.json` keeps its swarm identity and directory. Copied or hand-written files create new identities. A second start on the managed file is refused; use resume or copy the file outside its swarm directory for a fresh execution.
 - `--parallel` defaults to 3 and accepts integers from 1 through 8 for v1. This bounds direct Harness processes, not any subagents a Harness creates internally. The upper bound keeps the first release's process and signal handling modest.
 - `--out` applies only to `start`. It is resolved against the command's working directory and must name a directory that does not yet exist. LARP creates it exclusively before starting any chunk. This prevents two swarms from sharing output files. Without it, use the execution's `results/` directory.
 - All chunk paths are relative to the working directory of `start`, regardless of where the chunk file is stored. Print that absolute working directory at startup. Run `init` and `start` from the same directory when using a generated file for that repository.
@@ -107,20 +107,20 @@ Use the existing artifact helpers with a new `SwarmStore`:
 
 ```text
 ~/.larp/swarms/<id>/
-  swarm.json       immutable identity and inputs; kind: draft | execution
+  swarm.json       identity and phase inputs; kind: draft | execution
   messages.jsonl   append-only outcomes; progress is derived from this log
-  chunks.json      editable splitter output, for a draft only
+  chunks.json      editable splitter output, retained after start
   results/        generated <chunk-id>.md files, unless --out is supplied
   turns/          raw Harness streams, final output, schemas, process records
 ```
 
-Each `init` creates a draft ID. Each `start` creates a separate execution ID. This allows repeat reviews from the same file without special rules for files under LARP's storage directory.
+Each `init` creates a draft ID. Starting its generated chunk file keeps that ID. Start holds the swarm lock while reserving output and atomically replacing draft metadata with execution inputs. The log and Turn directories remain intact. If interrupted after output reservation, start can reuse a directory owned by that same swarm. Stale draft handles must reopen after the transition. Copied and hand-written files create new IDs.
 
 - Draft metadata saves the task, absolute working directory, resolved planner Participant, and optional Role context. A valid split reply and its session ID are appended to the draft log before materializing `chunks.json`.
 - Execution metadata saves a parsed copy of the complete chunk document, the resolved chunk Participant and Role name, absolute working directory, selected parallel limit, and output location. The source chunk file and Role files are not read again on resume.
 - Resolve the default result path from the artifact directory; store an absolute custom path only when provided. Avoid a second metadata write merely to discover the new ID.
 - Store reply bodies and completion session IDs in the log. Each failure entry identifies the splitter or chunk and its error. Link entries to their Turn directory for diagnosis. Do not persist a second mutable status table.
-- Use a single process lock and one log per draft or execution. Reuse `tryAcquireTurns` to refuse concurrent invocations and surviving Harness processes after a crash.
+- Use a single process lock and one log across draft and execution. Reuse `tryAcquireTurns` to refuse concurrent invocations and surviving Harness processes after a crash.
 - Chunk execution completion is authoritative only after a valid reply is appended. Markdown is a generated view of that reply. Append first, then write the result atomically. If export fails or the process crashes between these steps, resume rebuilds the output without calling the model again.
 - Resume reconciles completed chunk results from the log before scheduling remaining work. Result files are generated artifacts; manual edits can be replaced. Refuse unexpected file types or symlink targets rather than writing through them.
 - The draft file is intentionally editable. Once present, resume must not replace it with the original model reply. If it is absent but a valid split reply exists, recreate it without another Turn. Edits are validated at `start`.
@@ -160,8 +160,9 @@ interface ChunkDocument {
 // Throws a field-specific error; used for model replies and edited files.
 parseChunkDocument(value: unknown): ChunkDocument;
 
-// Persist immutable inputs; execution creation reserves its output directory.
+// Snapshot phase inputs; start reserves output and transitions managed drafts in place.
 SwarmStore.createDraft(input: DraftInput): SwarmStore;
+SwarmStore.startExecution(chunksPath: string, input: ExecutionSettings): SwarmStore;
 SwarmStore.createExecution(input: ExecutionInput): SwarmStore;
 SwarmStore.open(id: string): SwarmStore;
 
@@ -190,7 +191,7 @@ No scheduler or Harness API change is expected. Keep refactoring of existing com
 ## Ordered implementation
 
 1. **Chunk contract.** Add schema and parser tests, including round-trip preservation of a valid user-edited file and useful failures for invalid scope/IDs.
-2. **Persistence.** Add the store, immutable draft/execution metadata, output-directory reservation, log entries, and recovery/materialization tests. Use the existing single-writer append helpers under the swarm lock.
+2. **Persistence.** Add the store, saved draft/execution inputs and the locked transition, output-directory reservation, log entries, and recovery/materialization tests. Use the existing single-writer append helpers under the swarm lock.
 3. **Chunking.** Add splitter prompt composition and the draft workflow. Prove the intended Role reaches the splitter as context and that the workflow schema governs its reply. Save editable output and handle failed/interrupted init via resume.
 4. **Parallel execution.** Add chunk prompts and scheduling on the kernel. Prove bounded concurrency, failure isolation, one attempt per invocation, read-only requests, and resume without repeating completed work.
 5. **CLI and terminal display.** Wire all commands and flags, Role snapshots, file loading, the live chunk list, plain-output fallback, nesting guard, and exit codes. Add `log-update`, persist attempt durations, and keep display timing separate from workflow state. Exercise init, edit, start, failure, and resume through the real CLI with fake Harness executables.
@@ -209,7 +210,7 @@ No scheduler or Harness API change is expected. Keep refactoring of existing com
 - A second process cannot run the same swarm, reuse a custom output directory, or bypass the existing live-Harness process guard. Symlink output targets are refused.
 - Interrupting several running fake Harness children forwards the signal, stops new scheduling, preserves committed results, and leaves remaining work resumable.
 - Empty replies fail their chunk; a nonempty report with no findings succeeds. Final summaries and exit codes distinguish command failure from review findings.
-- Draft IDs cannot accidentally execute chunks on resume. `list` and `show` never launch models. All Turn-starting swarm commands refuse nested invocation under `LARP_TURN`.
+- Before explicit start, draft IDs cannot execute chunks on resume. After start, the same ID resumes execution. `list` and `show` never launch models. All Turn-starting swarm commands refuse nested invocation under `LARP_TURN`.
 - Terminal frames preserve chunk order, update durations and aggregate counts, and show failures without stopping other rows. Use a controlled clock and captured renderer writes to test state changes, frozen completion durations, resume, truncation, and omitted-row counts.
 - Redirected stderr uses plain lines and the 30-second idle heartbeat, with no cursor-control escapes. Display timers/listeners are cleaned up on success, failure, and interruption. Manually verify inline redraw and resizing in a real terminal with fake Harnesses, including more chunks than fit on screen.
 
@@ -229,4 +230,4 @@ Tests use fake Harnesses and temporary directories; they do not make paid model 
 
 V1 excludes source edits, worktrees, dependency graphs, per-chunk Roles, model-generated summaries, deduplication, follow-up messaging, selective reruns, repository snapshots, and automatic retry/backoff. The Caller can edit a copy of the chunk file and start a new execution for a different scope.
 
-The defaults are: separate draft/execution IDs, splitting through the dedicated `swarm-planner` Role, optional Role context at init, required Role at start, parallelism 3 with a maximum of 8, a new output directory per execution, one attempt per chunk per invocation, and fresh sessions on retries. Keep them consistent across help, tests, and the new ADR.
+The defaults are: one ID from generated draft through execution, splitting through the dedicated `swarm-planner` Role, optional Role context at init, required Role at start, parallelism 3 with a maximum of 8, a new output directory per execution, one attempt per chunk per invocation, and fresh sessions on retries. Keep them consistent across help, tests, and the new ADR.

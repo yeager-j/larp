@@ -173,7 +173,9 @@ function settlement(
 function initialRows(data: SwarmData, entries: SwarmEntry[]): SwarmRow[] {
   const ids = data.kind === "draft" ? ["splitter"] : data.document.chunks.map((chunk) => chunk.id);
   return ids.map((id) => {
-    const reply = entries.find((entry) => entry.key === id && entry.kind !== "failure");
+    const reply = entries.find(
+      (entry) => entry.key === id && entry.kind === (data.kind === "draft" ? "split" : "reply")
+    );
     return reply
       ? { id, status: "Complete", durationMs: reply.durationMs }
       : { id, status: "Queued" };

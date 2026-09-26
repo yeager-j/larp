@@ -27,7 +27,7 @@ import { ROLES, type Role } from "./message.js";
 import { runRelay } from "./relay.js";
 import { listRoles, loadRole, loadRoleSchema, type RoleDefinition } from "./roles.js";
 import { listRuns, RunStore } from "./run-store.js";
-import { parseChunkDocument, parseParallel } from "./swarm/chunks.js";
+import { parseParallel } from "./swarm/chunks.js";
 import { createSwarmOutput, terminalText } from "./swarm/output.js";
 import { executionProgress, runSwarm } from "./swarm/run.js";
 import { listSwarms, SwarmStore } from "./swarm/store.js";
@@ -60,7 +60,7 @@ larp agent start and message block until the reply is ready, then print it.
 larp discuss blocks until the Critic agrees (exit 0) or the round cap is reached (exit 2).
 Run them as background commands from a coding agent.
 Swarm commands block and display live chunk status on stderr (plain logs when redirected).
-init uses the swarm-planner Role; --role supplies context. start always creates a new execution.
+init uses the swarm-planner Role; --role supplies context. start keeps a generated chunks.json in the same swarm; copied files create new swarms.
 Chunk paths are relative to start's working directory. Resume reads current repository files
 in the saved directory, uses saved inputs, and retries only unfinished chunks.
 --parallel defaults to 3. --out must not exist. Result files are generated and replaced on resume.
@@ -481,10 +481,8 @@ async function swarmCommand(operands: string[], values: Options): Promise<void> 
       );
     refuseInsideTurn("larp swarm start");
     const parallel = parseParallel(values.parallel);
-    const document = parseChunkDocument(JSON.parse(readFileSync(values.chunks, "utf8")));
     const role = loadRole(values.role);
-    const store = SwarmStore.createExecution({
-      document,
+    const store = SwarmStore.startExecution(values.chunks, {
       role: role.name,
       participant: participantFor(role),
       parallel,

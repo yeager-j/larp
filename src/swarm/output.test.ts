@@ -172,3 +172,37 @@ test("live rendering reserves space for headers, including wrapped wide-characte
     ui.close!();
   }
 });
+
+test("execution rows do not count a planner reply for a chunk named splitter", () => {
+  const stream = Object.assign(new PassThrough(), { columns: 150, rows: 24, isTTY: true });
+  let output = "";
+  stream.on("data", (chunk) => {
+    output += chunk;
+  });
+  const ui = createSwarmOutput({ stream, terminal: true });
+  const execution = {
+    ...data,
+    document: { ...data.document, chunks: [{ id: "splitter", paths: ["src/"], focus: "Review" }] },
+  };
+  try {
+    ui.begin!(
+      execution,
+      [
+        {
+          id: "plan",
+          at: "now",
+          kind: "split",
+          key: "splitter",
+          durationMs: 5000,
+          sessionId: "s",
+          document: execution.document,
+        },
+      ],
+      "/reports"
+    );
+    assert.match(output, /\[splitter\] Queued/);
+    assert.match(output, /0 complete/);
+  } finally {
+    ui.close!();
+  }
+});

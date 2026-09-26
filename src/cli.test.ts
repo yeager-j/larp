@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import { writeConfig, type Config } from "./config.js";
@@ -299,21 +299,10 @@ process.stdin.on('end', () => {
       .replace("permission: read-only", "permission: write")
       .replace("web: true", "web: true\nschema: missing.json")
   );
-  const out = join(home, "results");
+  const out = join(dirname(chunksPath), "results");
   const start = invoke(
     home,
-    [
-      "swarm",
-      "start",
-      "--chunks",
-      chunksPath,
-      "--role",
-      "reviewer",
-      "--out",
-      out,
-      "--parallel",
-      "2",
-    ],
+    ["swarm", "start", "--chunks", chunksPath, "--role", "reviewer", "--parallel", "2"],
     path
   );
   assert.equal(start.status, 1, start.stderr);
@@ -322,9 +311,18 @@ process.stdin.on('end', () => {
   assert.match(start.stderr, /\[start\] a/);
   assert.doesNotMatch(start.stderr, /\x1b/);
   const id = /Swarm ([\w-]+):/.exec(start.stdout)![1]!;
-  assert.notEqual(id, /swarm ([\w-]+)/.exec(init.stderr)![1]);
+  assert.equal(id, /swarm ([\w-]+)/.exec(init.stderr)![1]);
+  assert.match(start.stdout, new RegExp(out));
   const store = SwarmStore.open(id, join(home, ".larp/swarms"));
   assert.equal(store.data.kind === "execution" && store.data.document.task, "Edited task");
+  const restart = invoke(
+    home,
+    ["swarm", "start", "--chunks", chunksPath, "--role", "reviewer"],
+    path
+  );
+  assert.equal(restart.status, 1);
+  assert.match(restart.stderr, /already started.*larp swarm resume/);
+  assert.equal(readdirSync(join(home, ".larp/swarms")).length, 1);
   rmSync(chunksPath);
   rmSync(reviewerPath);
   const resume = invoke(home, ["swarm", "resume", id], path);

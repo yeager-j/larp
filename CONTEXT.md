@@ -53,7 +53,7 @@ Two Participants, the Author and the Critic, answering one Caller message until 
 _Avoid_: debate, conversation, Run
 
 **Swarm**:
-A read-only workflow that drafts independent Chunks or executes a reviewed Chunk document. A draft and each execution have separate identities under `~/.larp/swarms/`. One log owns progress for all Chunks in an execution. A Swarm Participant is not a standalone Agent.
+A read-only workflow that drafts independent Chunks or executes a reviewed Chunk document. Starting a generated chunk file transitions its draft to execution under the same identity in `~/.larp/swarms/`. Copied or hand-written files create new identities. One log owns progress for all Chunks in an execution. A Swarm Participant is not a standalone Agent.
 
 **Chunk**:
 One independent reporting scope: a unique ID, literal paths relative to the execution directory, and focus instructions. Paths scope the findings, not the files a Participant may read for context. Each successful Chunk produces one Markdown report.

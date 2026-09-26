@@ -4,11 +4,11 @@ status: accepted
 
 # Read-only swarms split, review, and execute independent chunks
 
-`larp swarm init` uses the dedicated `swarm-planner` Role to produce an editable, versioned chunk document. `larp config` creates this built-in Role when missing, including on existing installations. Its instructions own the chunking guidance; the workflow owns the read-only and structured-output protocol. An optional Role supplies the intended execution criteria as context. The Caller reviews that file, then `start --chunks <path> --role <name>` creates a separate execution. Hand-written documents work too. There is no interactive Gate or implicit execution after splitting.
+`larp swarm init` uses the dedicated `swarm-planner` Role to produce an editable, versioned chunk document. `larp config` creates this built-in Role when missing, including on existing installations. Its instructions own the chunking guidance; the workflow owns the read-only and structured-output protocol. An optional Role supplies the intended execution criteria as context. The Caller reviews that file, then `start --chunks <path> --role <name>` starts execution in the same swarm directory. Copied and hand-written documents create new swarms. There is no interactive Gate or implicit execution after splitting.
 
 ## Decisions
 
-- Drafts and executions have distinct identities under `~/.larp/swarms/`. Each `start` snapshots the reviewed document, working directory, resolved Role settings, output location, and concurrency limit. Resume does not reload Role or input files.
+- A generated `~/.larp/swarms/<id>/chunks.json` keeps its draft identity at `start`, so results stay beside the input. Under the swarm lock, start reserves output and atomically replaces draft metadata with execution metadata, preserving the log and Turn directories. A stale draft handle must reopen before running. Repeated starts are refused with a resume instruction; a copy outside the swarm directory can start a new swarm. Each `start` snapshots the reviewed document, working directory, resolved Role settings, output location, and concurrency limit. Resume does not reload Role or input files.
 - Built-in setup Roles are independent of the plan workflow's Participant list. Adding `swarm-planner` does not add another Participant to plan runs. Existing drafts retain their saved Participant when resumed.
 - One log per identity owns all outcomes. The existing relay kernel runs at most one Turn per Chunk and defaults to three simultaneous Turns, with a v1 limit of eight. No standalone Agent records or second scheduler are involved.
 - All Turns use the existing read-only permission profile. A workflow's JSON/Markdown output contract overrides standalone-Agent Role schemas. Custom Harness arguments retain the existing trusted-input limitation; they must not bypass permission or session settings.
@@ -21,4 +21,4 @@ status: accepted
 
 ## Deferred
 
-Source edits, worktrees, dependent Chunks, per-Chunk Roles, synthesis, deduplication, selective reruns, follow-up messages, repository snapshots, and automatic retry/backoff are outside v1. A revised document can start a new execution.
+Source edits, worktrees, dependent Chunks, per-Chunk Roles, synthesis, deduplication, selective reruns, follow-up messages, repository snapshots, and automatic retry/backoff are outside v1. A copy of a revised document outside its swarm directory can start a new execution.
